@@ -1,0 +1,21 @@
+# Dependencies & builds
+node_modules/
+dist/
+dist-demo/
+
+# Secrets – never commit
+.env
+*.env
+!.env.example
+
+# Not part of the deployed app
+*.zip
+*.pdf
+db/
+tasksphere-schema.sql
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.log

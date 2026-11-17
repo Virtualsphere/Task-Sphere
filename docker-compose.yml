@@ -1,0 +1,48 @@
+# Local test setup: MySQL + TaskSphere. Start with:  docker compose up --build
+# Then open http://localhost:5000 and pick a test user.
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: tasksphere
+      MYSQL_DATABASE: pm_tool
+      TZ: Asia/Kolkata
+    healthcheck:
+      # Use TCP (127.0.0.1), not the socket: during first-run init MySQL runs a
+      # socket-only temporary server, which would pass a socket ping too early.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-ptasksphere"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - dbdata:/var/lib/mysql
+    ports:
+      - "3307:3306"   # optional: inspect the DB from your machine on port 3307
+
+  app:
+    build: .
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      TZ: Asia/Kolkata
+      CLIENT_ORIGIN: http://localhost:5000
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: tasksphere
+      DB_NAME: pm_tool
+      JWT_SECRET: local-test-only-secret-change-me
+      # ---- local test mode ----
+      DEV_LOGIN: "true"          # pick a test user instead of Google sign-in
+      CALENDAR_MODE: fake        # simulated Google Calendar (bookings, clear-calendar check, Meet links)
+      GOOGLE_CLIENT_ID: ""
+      # To test real Google Workspace sign-in + Calendar instead, set DEV_LOGIN: "false",
+      # remove CALENDAR_MODE, and fill GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ALLOWED_DOMAIN, TOKEN_ENC_KEY.
+
+volumes:
+  dbdata:
