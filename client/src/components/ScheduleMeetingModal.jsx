@@ -71,19 +71,56 @@ function firstSlot() {
   return d;
 }
 
-// Schedule a meeting: checks everyone's calendar is clear, then books the Google Calendar event + Google Meet
-export default function ScheduleMeetingModal({ people, preselected = [], spaceId, conversationId, contextLabel, onClose, onCreated }) {
+// Remove [s, e) from busy blocks – the meeting being edited must not show as clashing with itself
+function withoutRange(busy, s, e) {
+  const out = [];
+  for (const b of busy) {
+    const bs = new Date(b.start); const be = new Date(b.end);
+    if (be <= s || bs >= e) { out.push(b); continue; }
+    if (bs < s) out.push({ start: b.start, end: s.toISOString() });
+    if (be > e) out.push({ start: e.toISOString(), end: b.end });
+  }
+  return out;
+}
+
+// What the form needs to edit something: a TaskSphere meeting or one of your own Google Calendar events
+export function meetingToEdit(m) {
+  return {
+    path: `/meetings/${m.id}`, title: m.title, start: m.start_at, end: m.end_at, description: m.description || '',
+    userIds: m.attendees.filter((a) => a.user_id).map((a) => a.user_id),
+    emails: m.attendees.filter((a) => !a.user_id).map((a) => a.email),
+    people: m.attendees.filter((a) => a.user_id).map((a) => ({ id: a.user_id, name: a.name, email: a.email, avatar_url: a.avatar_url })),
+    addMeet: !!m.meet_link,
+  };
+}
+export function eventToEdit(e, people) {
+  const byEmail = Object.fromEntries(people.map((p) => [p.email.toLowerCase(), p]));
+  return {
+    path: `/calendar/events/${encodeURIComponent(e.id)}`, title: e.title, start: e.start, end: e.end, description: e.description || '',
+    userIds: e.attendees.filter((a) => byEmail[a]).map((a) => byEmail[a].id),
+    emails: e.attendees.filter((a) => !byEmail[a]),
+    people: [], addMeet: !!e.meet_link, recurring: e.recurring,
+  };
+}
+
+// Schedule a meeting: checks everyone's calendar is clear, then books the Google Calendar event + Google Meet.
+// With `editing` (from meetingToEdit / eventToEdit) the same form changes an existing meeting instead.
+export default function ScheduleMeetingModal({ people: teammates, preselected = [], spaceId, conversationId, contextLabel, editing, onClose, onCreated }) {
   const { user } = useAuth();
-  const slot = useMemo(firstSlot, []);
+  const slot = useMemo(() => (editing ? new Date(editing.start) : firstSlot()), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const origMinutes = editing ? Math.round((new Date(editing.end) - new Date(editing.start)) / 60000) : 30;
+  // Attendees of the meeting being edited stay selectable even if they no longer share a space with you
+  const people = useMemo(() => [...teammates, ...(editing?.people || []).filter((p) => !teammates.some((t) => t.id === p.id))], [teammates, editing]);
+  const durations = useMemo(() => [...new Set([...DURATIONS, origMinutes])].sort((a, b) => a - b), [origMinutes]);
   const [status, setStatus] = useState(null);
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(editing?.title || '');
   const [date, setDate] = useState(localDate(slot));
   const [time, setTime] = useState(hhmm(slot));
-  const [duration, setDuration] = useState(30);
-  const [selected, setSelected] = useState(() => new Set(preselected.filter((id) => id !== user.id)));
-  const [emails, setEmails] = useState('');
-  const [description, setDescription] = useState('');
-  const [addMeet, setAddMeet] = useState(true);
+  const [duration, setDuration] = useState(origMinutes);
+  const [selected, setSelected] = useState(() => new Set((editing ? editing.userIds : preselected).filter((id) => id !== user.id)));
+  const [emails, setEmails] = useState(editing ? editing.emails.join(', ') : '');
+  const [description, setDescription] = useState(editing?.description || '');
+  const [addMeet, setAddMeet] = useState(editing ? editing.addMeet : true);
   const [busy, setBusy] = useState(null);           // free/busy for the chosen day
   const [checking, setChecking] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
@@ -105,6 +142,9 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
   const DAY_START = Math.max(0, Math.floor(toMin(config.workHours.start) / 60) - 1);
   const DAY_END = Math.min(24, Math.ceil(toMin(config.workHours.end) / 60) + 1);
   const attendeeKey = [...selected].sort().join(',') + '|' + extraEmails.join(',');
+  const ignoreOwnSlot = (res) => (editing
+    ? res.map((p) => ({ ...p, busy: withoutRange(p.busy, new Date(editing.start), new Date(editing.end)) }))
+    : res);
 
   // Check everyone's calendar for the chosen day automatically
   useEffect(() => {
@@ -117,7 +157,7 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
         const from = new Date(`${date}T${pad(DAY_START)}:00`);
         const to = new Date(`${date}T${pad(DAY_END)}:00`);
         const res = await api('/calendar/freebusy', { method: 'POST', body: { user_ids: [...selected], emails: extraEmails, timeMin: from.toISOString(), timeMax: to.toISOString() } });
-        if (id === reqId.current) setBusy(res);
+        if (id === reqId.current) setBusy(ignoreOwnSlot(res));
       } catch (e) { if (id === reqId.current) setError(e.message); }
       if (id === reqId.current) setChecking(false);
     }, 450);
@@ -138,7 +178,7 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
       const from = new Date();
       const to = new Date(from.getTime() + 8 * 86400000);
       const res = await api('/calendar/freebusy', { method: 'POST', body: { user_ids: [...selected], emails: extraEmails, timeMin: from.toISOString(), timeMax: to.toISOString() } });
-      const all = res.flatMap((p) => p.busy);
+      const all = ignoreOwnSlot(res).flatMap((p) => p.busy);
       setSuggestions(findFreeSlots({
         busy: all, from, days: 8, duration,
         workStart: config.workHours.start, workEnd: config.workHours.end, workDays: config.workHours.days,
@@ -151,16 +191,15 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
   const book = async (force = false) => {
     setSaving(true); setError('');
     try {
-      const meeting = await api('/meetings', {
-        method: 'POST',
-        body: {
-          title, description, start: start.toISOString(), end: end.toISOString(),
-          time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          user_ids: [...selected], emails: extraEmails, add_meet: addMeet, force,
-          space_id: spaceId || undefined, conversation_id: conversationId || undefined,
-        },
-      });
-      setBooked(meeting);
+      const body = {
+        title, description, start: start.toISOString(), end: end.toISOString(),
+        time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        user_ids: [...selected], emails: extraEmails, add_meet: addMeet, force,
+      };
+      const meeting = editing
+        ? await api(editing.path, { method: 'PATCH', body })
+        : await api('/meetings', { method: 'POST', body: { ...body, space_id: spaceId || undefined, conversation_id: conversationId || undefined } });
+      setBooked({ ...meeting, start_at: meeting.start_at || meeting.start, end_at: meeting.end_at || meeting.end });
       setConflicts(null);
     } catch (err) {
       if (err.data?.conflicts) setConflicts(err.data.conflicts);
@@ -178,17 +217,25 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
   if (booked) {
     const copy = async () => { try { await navigator.clipboard.writeText(booked.meet_link); setCopied(true); } catch { /* ignore */ } };
     return (
-      <Modal title="Meeting booked" onClose={() => onCreated?.(booked)}>
+      <Modal title={editing ? 'Meeting updated' : 'Meeting booked'} onClose={() => onCreated?.(booked)}>
         <div className="booked">
           <div className="booked-tick">✓</div>
           <h3>{booked.title}</h3>
           <p className="muted">{fmtLong(booked.start_at, booked.end_at)}</p>
           {config.calendarSimulated && <p className="small warn-text">Local test mode – calendar booking and Meet link are simulated.</p>}
-          <ul className="booked-list">
-            <li>📅 Added to your Google Calendar ({status?.email})</li>
-            <li>✉️ Invites emailed to {booked.attendees.length - 1} {booked.attendees.length - 1 === 1 ? 'person' : 'people'} – it appears on their calendars</li>
-            {booked.meet_link ? <li>🎥 Google Meet booked</li> : <li className="muted">No video link added</li>}
-          </ul>
+          {editing ? (
+            <ul className="booked-list">
+              <li>📅 Updated in your Google Calendar ({status?.email})</li>
+              <li>✉️ Google has emailed the changes to everyone invited</li>
+              {booked.meet_link ? <li>🎥 Google Meet link: kept for this meeting</li> : <li className="muted">No video link</li>}
+            </ul>
+          ) : (
+            <ul className="booked-list">
+              <li>📅 Added to your Google Calendar ({status?.email})</li>
+              <li>✉️ Invites emailed to {booked.attendees.length - 1} {booked.attendees.length - 1 === 1 ? 'person' : 'people'} – it appears on their calendars</li>
+              {booked.meet_link ? <li>🎥 Google Meet booked</li> : <li className="muted">No video link added</li>}
+            </ul>
+          )}
           {booked.meet_link && (
             <div className="meet-box">
               <span className="clamp1">{booked.meet_link}</span>
@@ -206,7 +253,7 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
   }
 
   return (
-    <Modal title={`Schedule a meeting${contextLabel ? ` · ${contextLabel}` : ''}`} onClose={onClose} wide>
+    <Modal title={editing ? 'Edit meeting' : `Schedule a meeting${contextLabel ? ` · ${contextLabel}` : ''}`} onClose={onClose} wide>
       {status === null ? <p className="muted">Loading…</p> : !status.connected ? (
         <div className="empty slim">
           <h3>Connect your Google Calendar</h3>
@@ -215,6 +262,7 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
         </div>
       ) : (
         <form className="form" onSubmit={(e) => { e.preventDefault(); book(false); }}>
+          {editing?.recurring && <p className="small warn-text">This is one occurrence of a repeating event – only this occurrence will change.</p>}
           <label>Title<input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Sprint planning" required /></label>
 
           <div className="field-label">Attendees</div>
@@ -234,7 +282,7 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
             <label>Start time<input type="time" value={time} step={900} onChange={(e) => setTime(e.target.value)} required /></label>
             <label>Duration
               <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-                {DURATIONS.map((d) => <option key={d} value={d}>{d < 60 ? `${d} min` : `${d / 60} hr${d > 60 ? 's' : ''}`}</option>)}
+                {durations.map((d) => <option key={d} value={d}>{d < 60 ? `${d} min` : `${d / 60} hr${d > 60 ? 's' : ''}`}</option>)}
               </select>
             </label>
           </div>
@@ -287,16 +335,18 @@ export default function ScheduleMeetingModal({ people, preselected = [], spaceId
               <div className="small">{busySentence(conflicts.map((c) => (c.self ? 'you' : c.name)))} busy at {slotLabel(start)}.</div>
               <div className="row gap wrap">
                 <button type="button" className="btn small primary" onClick={findClearTime}>✨ Find a clear time</button>
-                <button type="button" className="btn small" onClick={() => book(true)} disabled={saving}>Book anyway</button>
+                <button type="button" className="btn small" onClick={() => book(true)} disabled={saving}>{editing ? 'Save anyway' : 'Book anyway'}</button>
               </div>
             </div>
           )}
           {error && <p className="error">{error}</p>}
           <div className="form-actions spread">
-            <span className="muted small">Booking on: {status.email}</span>
+            <span className="muted small">{editing ? 'Calendar' : 'Booking on'}: {status.email}</span>
             <div className="row gap">
               <button type="button" className="btn" onClick={onClose}>Cancel</button>
-              <button className="btn primary" disabled={saving || !title.trim()}>{saving ? 'Booking…' : addMeet ? 'Book calendar & Meet' : 'Book calendar'}</button>
+              <button className="btn primary" disabled={saving || !title.trim()}>
+                {editing ? (saving ? 'Saving…' : 'Save changes') : saving ? 'Booking…' : addMeet ? 'Book calendar & Meet' : 'Book calendar'}
+              </button>
             </div>
           </div>
         </form>

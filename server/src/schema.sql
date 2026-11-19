@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   id INT AUTO_INCREMENT PRIMARY KEY,
   conversation_id INT NOT NULL,
   user_id INT NOT NULL,
-  kind ENUM('text','meeting','huddle') NOT NULL DEFAULT 'text',
+  kind ENUM('text','meeting','huddle','file') NOT NULL DEFAULT 'text',
   body TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_conv (conversation_id, id),
@@ -202,4 +202,22 @@ CREATE TABLE IF NOT EXISTS meeting_attendees (
   PRIMARY KEY (meeting_id, email),
   FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Files shared in chats: a 1:1/group conversation OR a space chat (exactly one is set). The file itself lives on disk (UPLOAD_DIR) under stored_name.
+CREATE TABLE IF NOT EXISTS chat_attachments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  conversation_id INT NULL,
+  space_id INT NULL,
+  user_id INT NOT NULL,
+  stored_name VARCHAR(80) NOT NULL UNIQUE,
+  original_name VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(150) NOT NULL,
+  size_bytes INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_att_conv (conversation_id),
+  INDEX idx_att_space (space_id),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -26,3 +26,34 @@ export async function api(path, { method = 'GET', body } = {}) {
   }
   return data;
 }
+
+const authHeader = () => (getToken() ? { Authorization: `Bearer ${getToken()}` } : {});
+
+// Upload a file (multipart). Uses XHR so the caller can show progress (0–1).
+export function apiUpload(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api${path}`);
+    Object.entries(authHeader()).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+    if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* not JSON (e.g. proxy error page) */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      if (xhr.status === 401) { setToken(null); window.location.href = '/login'; }
+      reject(new Error(data.error || (xhr.status === 413 ? 'This file is too large' : `Upload failed (${xhr.status})`)));
+    };
+    xhr.onerror = () => reject(new Error('Upload failed – check your connection'));
+    xhr.send(formData);
+  });
+}
+
+// Fetch a protected file as a Blob (images and downloads need the login token)
+export async function apiBlob(path) {
+  const res = await fetch(`/api${path}`, { headers: authHeader() });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Could not load file (${res.status})`);
+  }
+  return res.blob();
+}

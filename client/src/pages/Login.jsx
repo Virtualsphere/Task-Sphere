@@ -69,7 +69,7 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="brand-mark">◆</div>
+        <img className="brand-logo" src="/logo-mark.png" alt="" width="56" height="56" />
         <h1>TaskSphere</h1>
         <p className="muted">Spaces, lists, tickets, chat, huddles and meetings – in one place.</p>
         <div className="login-btn">

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { config } from '../config';
 import { useAuth } from '../AuthContext';
 import { can } from '../util';
 import Modal from './Modal';
@@ -32,13 +33,21 @@ export default function MembersModal({ space, onClose, onChanged }) {
     } catch (e) { setError(e.message); }
   };
 
-  const invite = (e) => {
+  const invite = async (e) => {
     e.preventDefault();
-    run(async () => {
-      const r = await api(`/spaces/${space.id}/members`, { method: 'POST', body: { email, role } });
+    setError(''); setInfo('');
+    const to = email;
+    try {
+      const r = await api(`/spaces/${space.id}/members`, { method: 'POST', body: { email: to, role } });
       setEmail('');
-      return r;
-    }, `Added ${email}. If they haven't signed in yet, they'll join when they first log in with Google.`);
+      const joined = r.added
+        ? `Added ${to}.`
+        : `Invited ${to}. They'll join when they first sign in with Google.`;
+      setInfo(r.emailSent
+        ? `${joined} An email has been sent to let them know.`
+        : `${joined} The notification email could not be sent, so please let them know yourself.`);
+      onChanged();
+    } catch (err) { setError(err.message); }
   };
 
   const leave = async () => {
@@ -55,7 +64,7 @@ export default function MembersModal({ space, onClose, onChanged }) {
     <Modal title={`Members of ${space.name}`} onClose={onClose} wide>
       {isAdmin && (
         <form className="invite-row" onSubmit={invite}>
-          <input type="email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input type="email" placeholder={`name@${config.allowedDomain || 'company.com'}`} value={email} onChange={(e) => setEmail(e.target.value)} required />
           <select value={role} onChange={(e) => setRole(e.target.value)}>
             {isOwner && <option value="admin">Admin</option>}
             <option value="member">Member</option>

@@ -16,6 +16,9 @@ if (!process.env.JWT_SECRET) {
 if (process.env.DEV_LOGIN === 'true') {
   console.warn('⚠  DEV_LOGIN=true – anyone can sign in as any test user. Never enable this on a public server.');
 }
+console.log(require('./mailer').mailEnabled
+  ? `Invite emails: on (sending as ${process.env.GMAIL_USER})`
+  : 'Invite emails: off (set GMAIL_USER and GMAIL_APP_PASSWORD to enable)');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,6 +31,8 @@ app.set('io', io);
 app.use(cors({ origin }));
 app.use(express.json({ limit: '1mb' }));
 
+const attachments = require('./routes/attachments');
+
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.get('/api/config', (req, res) => res.json({
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
@@ -38,6 +43,7 @@ app.get('/api/config', (req, res) => res.json({
   allowedDomain: (process.env.ALLOWED_DOMAIN || '').trim().toLowerCase(),
   devLogin: process.env.DEV_LOGIN === 'true',
   calendarSimulated: process.env.CALENDAR_MODE === 'fake',
+  maxUploadMb: attachments.MAX_MB,
   // Office hours used to suggest meeting times (24h, local time of the person scheduling)
   workHours: { start: process.env.WORK_START || '10:00', end: process.env.WORK_END || '19:30', days: (process.env.WORK_DAYS || '1,2,3,4,5,6').split(',').map(Number) },
 }));
@@ -46,6 +52,7 @@ app.use('/api/spaces', requireAuth, require('./routes/spaces'));
 app.use('/api', requireAuth, require('./routes/lists'));
 app.use('/api', requireAuth, require('./routes/tickets'));
 app.use('/api', requireAuth, require('./routes/chats'));
+app.use('/api', requireAuth, attachments);
 app.use('/api', requireAuth, require('./routes/calendar'));
 
 // Serve the built React app in production (client/dist)

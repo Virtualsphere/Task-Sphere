@@ -22,7 +22,29 @@ const mysql = require('mysql2/promise');
   const [cols] = await conn.query(
     `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'messages' AND COLUMN_NAME = 'kind'`, [dbName]);
   if (!cols.length) {
-    await conn.query(`ALTER TABLE messages ADD COLUMN kind ENUM('text','meeting','huddle') NOT NULL DEFAULT 'text' AFTER user_id`);
+    await conn.query(`ALTER TABLE messages ADD COLUMN kind ENUM('text','meeting','huddle','file') NOT NULL DEFAULT 'text' AFTER user_id`);
+  }
+
+  // v3 upgrade: chat messages (personal/group and space) can be file attachments
+  const columnInfo = async (table, column) => {
+    const [[row]] = await conn.query(
+      'SELECT COLUMN_TYPE AS t, IS_NULLABLE AS nullable FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [dbName, table, column]);
+    return row;
+  };
+  for (const table of ['direct_messages', 'messages']) {
+    const kind = await columnInfo(table, 'kind');
+    if (kind && !kind.t.includes("'file'")) {
+      await conn.query(`ALTER TABLE ${table} MODIFY COLUMN kind ENUM('text','meeting','huddle','file') NOT NULL DEFAULT 'text'`);
+    }
+  }
+  // Early version of chat_attachments was for personal chats only: add space chats
+  if (!(await columnInfo('chat_attachments', 'space_id'))) {
+    await conn.query(`ALTER TABLE chat_attachments
+      MODIFY COLUMN conversation_id INT NULL,
+      ADD COLUMN space_id INT NULL AFTER conversation_id,
+      ADD INDEX idx_att_space (space_id),
+      ADD CONSTRAINT fk_att_space FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE`);
   }
   await conn.end();
   console.log(`Database "${dbName}" is ready.`);

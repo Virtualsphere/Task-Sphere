@@ -5,7 +5,7 @@ import { getSocket } from '../socket';
 import { useAuth } from '../AuthContext';
 import TopBar from '../components/TopBar';
 import Avatar from '../components/Avatar';
-import ScheduleMeetingModal, { ConnectCalendarButton, GoogleG } from '../components/ScheduleMeetingModal';
+import ScheduleMeetingModal, { ConnectCalendarButton, GoogleG, meetingToEdit, eventToEdit } from '../components/ScheduleMeetingModal';
 import { fmtRange } from '../components/ChatCards';
 
 const dayKey = (d) => new Date(d).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -20,6 +20,7 @@ export default function CalendarPage() {
   const [days, setDays] = useState(7);
   const [error, setError] = useState('');
   const [showSchedule, setShowSchedule] = useState(false);
+  const [editing, setEditing] = useState(null);   // what the edit form is open for
 
   const loadEvents = (d = days) => api(`/calendar/events?days=${d}`).then(setEvents).catch((e) => { setError(e.message); setEvents([]); });
   const loadMeetings = () => api('/meetings').then(setMeetings).catch(() => {});
@@ -32,7 +33,8 @@ export default function CalendarPage() {
     const refresh = () => { loadMeetings(); };
     s.on('meeting:new', refresh);
     s.on('meeting:cancelled', refresh);
-    return () => { s.off('meeting:new', refresh); s.off('meeting:cancelled', refresh); };
+    s.on('meeting:updated', refresh);
+    return () => { s.off('meeting:new', refresh); s.off('meeting:cancelled', refresh); s.off('meeting:updated', refresh); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const disconnect = async () => {
@@ -44,6 +46,16 @@ export default function CalendarPage() {
     if (!confirm(`Cancel "${m.title}"? Attendees will get a cancellation email.`)) return;
     try { await api(`/meetings/${m.id}`, { method: 'DELETE' }); loadMeetings(); if (status?.connected) loadEvents(); }
     catch (e) { setError(e.message); }
+  };
+
+  const editMeeting = (m) => { setError(''); setEditing(meetingToEdit(m)); };
+  const editEvent = (e) => {
+    setError('');
+    if (e.meeting_id) {
+      const m = meetings.find((x) => x.id === e.meeting_id);
+      return m ? setEditing(meetingToEdit(m)) : setError('This meeting is not in your TaskSphere list any more – refresh the page.');
+    }
+    return setEditing(eventToEdit(e, people));
   };
 
   const grouped = {};
@@ -99,7 +111,8 @@ export default function CalendarPage() {
                           </div>
                         </div>
                         {e.meet_link && <a className="btn primary small" href={e.meet_link} target="_blank" rel="noreferrer">Join Meet</a>}
-                        <a className="btn small" href={e.html_link} target="_blank" rel="noreferrer">Open</a>
+                        {e.editable && <button className="btn small" onClick={() => editEvent(e)}>✎ Edit</button>}
+                        {e.html_link && <a className="icon-btn" href={e.html_link} target="_blank" rel="noreferrer" title="Open in Google Calendar">↗</a>}
                       </div>
                     );
                   })}
@@ -111,21 +124,25 @@ export default function CalendarPage() {
                 <div className="row gap"><GoogleG /> <strong className="grow clamp1">{status.email}</strong></div>
                 <button className="btn small ghost" onClick={disconnect}>Disconnect</button>
               </div>
-              <MeetingList meetings={meetings} meId={user.id} onCancel={cancelMeeting} />
+              <MeetingList meetings={meetings} meId={user.id} onCancel={cancelMeeting} onEdit={editMeeting} />
             </aside>
           </div>
         )}
-        {!status?.connected && meetings.length > 0 && <div className="cal-side standalone"><MeetingList meetings={meetings} meId={user.id} onCancel={cancelMeeting} /></div>}
+        {!status?.connected && meetings.length > 0 && <div className="cal-side standalone"><MeetingList meetings={meetings} meId={user.id} onCancel={cancelMeeting} onEdit={editMeeting} /></div>}
       </main>
       {showSchedule && (
         <ScheduleMeetingModal people={people} onClose={() => setShowSchedule(false)}
           onCreated={() => { setShowSchedule(false); loadMeetings(); loadEvents(); }} />
       )}
+      {editing && (
+        <ScheduleMeetingModal key={editing.path} people={people} editing={editing} onClose={() => setEditing(null)}
+          onCreated={() => { setEditing(null); loadMeetings(); if (status?.connected) loadEvents(); }} />
+      )}
     </div>
   );
 }
 
-export function MeetingList({ meetings, meId, onCancel, compact }) {
+export function MeetingList({ meetings, meId, onCancel, onEdit, compact }) {
   return (
     <div className={compact ? '' : 'card-box'}>
       {!compact && <h4>Meetings from TaskSphere</h4>}
@@ -142,6 +159,7 @@ export function MeetingList({ meetings, meId, onCancel, compact }) {
           </div>
           <div className="meeting-actions">
             {m.meet_link && <a className="btn primary small" href={m.meet_link} target="_blank" rel="noreferrer">Join</a>}
+            {onEdit && m.organizer_id === meId && <button className="icon-btn" title="Edit meeting" onClick={() => onEdit(m)}>✎</button>}
             {onCancel && m.organizer_id === meId && <button className="icon-btn danger" title="Cancel meeting" onClick={() => onCancel(m)}>✕</button>}
           </div>
         </div>

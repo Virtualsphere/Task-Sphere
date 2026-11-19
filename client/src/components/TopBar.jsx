@@ -24,7 +24,7 @@ export default function TopBar({ children }) {
   const unread = useUnread();
   return (
     <header className="topbar">
-      <Link to="/" className="brand"><span className="brand-mark small">◆</span> <span className="hide-sm">TaskSphere</span></Link>
+      <Link to="/" className="brand"><img className="brand-logo small" src="/logo-mark.png" alt="" width="28" height="28" /> <span className="hide-sm">TaskSphere</span></Link>
       <nav className="topnav">
         <NavLink to="/" end>Spaces</NavLink>
         <NavLink to="/messages">Messages {unread > 0 && <span className="badge">{unread}</span>}</NavLink>

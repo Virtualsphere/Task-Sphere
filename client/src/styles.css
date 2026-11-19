@@ -413,3 +413,58 @@ a.btn { display: inline-flex; align-items: center; gap: 6px; }
 .block { display: block; }
 
 .roles-col { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+
+/* ---------- Chat file attachments ---------- */
+.thread { position: relative; }
+.thread.drag-over .thread-body { outline: 2px dashed var(--primary); outline-offset: -8px; }
+.drop-hint { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+  background: rgba(238, 240, 255, 0.85); color: var(--primary); font-weight: 600; pointer-events: none; }
+.attach-btn { padding: 0 10px; font-size: 16px; }
+.pending-files { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px 0; border-top: 1px solid var(--border); }
+.pending-file { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; padding: 3px 8px;
+  background: var(--primary-soft); border-radius: 999px; font-size: 12px; }
+.file-msg { display: flex; flex-direction: column; gap: 6px; max-width: 320px; }
+.file-img-btn { border: none; padding: 0; background: none; cursor: zoom-in; display: block; }
+.file-img { display: block; max-width: 100%; max-height: 260px; border-radius: 8px; object-fit: contain; background: #fff; }
+.file-img-loading { padding: 20px; text-align: center; }
+.file-card { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; min-width: 220px; }
+.file-icon { font-size: 22px; line-height: 1; }
+.file-info { min-width: 0; }
+.file-name { font-weight: 600; font-size: 13px; }
+.file-msg .muted { color: var(--muted); }
+.file-caption { white-space: pre-wrap; }
+@media (max-width: 760px) { .file-card { min-width: 0; } .file-msg { max-width: 100%; } }
+/* Space chat side panel: same attachments, narrower layout */
+.chat-panel { position: relative; }
+.chat-panel.drag-over .chat-body { outline: 2px dashed var(--primary); outline-offset: -8px; }
+.chat-panel .file-msg { max-width: 100%; }
+.chat-panel .file-card { min-width: 0; }
+.chat-panel .file-img { max-height: 200px; }
+.chat-panel .pending-file { max-width: 100%; }
+
+/* ---------- Huddle: drag, screen-share stage, full screen ---------- */
+.huddle-head.draggable { cursor: grab; touch-action: none; user-select: none; }
+.huddle-head.draggable:active { cursor: grabbing; }
+/* A shared screen is never cropped */
+.tile.screen video { object-fit: contain; background: #0f1020; }
+/* Stage: the shared screen fills the space, everyone else floats in a movable box */
+.huddle-stage { position: relative; flex: 1; min-height: 0; margin: 4px 12px 8px; border-radius: 12px; overflow: hidden; background: #0f1020; }
+.stage-main { position: absolute; inset: 0; }
+.stage-main .tile { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 0; border: none; }
+.stage-pip { position: absolute; right: 12px; bottom: 12px; z-index: 2; width: 200px; max-height: calc(100% - 24px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; background: rgba(22, 24, 42, .75);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45); cursor: grab; touch-action: none; user-select: none; }
+.stage-pip:active { cursor: grabbing; }
+.huddle-window .stage-pip .tile { aspect-ratio: 16 / 10; min-height: auto; flex-shrink: 0; }
+.stage-pip .tile video { pointer-events: none; }
+/* Real full screen (browser), keeps the header, controls and the movable box */
+.huddle-window.is-fullscreen { inset: 0; width: 100%; height: 100%; border-radius: 0; }
+.huddle-window.is-fullscreen .huddle-stage { margin: 0; border-radius: 0; }
+.huddle-window:fullscreen { inset: 0; width: 100%; height: 100%; border-radius: 0; }
+@media (max-width: 760px) { .stage-pip { width: 130px; } }
+
+/* Company icon used as the TaskSphere logo (top bar + login) */
+.brand-logo { display: block; width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 1px 3px rgba(16, 24, 40, .12); }
+.brand-logo.small { width: 28px; height: 28px; border-radius: 7px; }
+.login-card .brand-logo { margin: 0 auto; }

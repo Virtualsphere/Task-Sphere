@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const db = require('../db');
 const { ah, assertRole, HttpError, notify, ROLE_RANK } = require('../access');
+const { sendSpaceInvite } = require('../mailer');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -83,6 +84,11 @@ router.post('/:spaceId/members', ah(async (req, res) => {
   const email = (req.body.email || '').trim().toLowerCase();
   const role = req.body.role || 'member';
   if (!EMAIL_RE.test(email)) throw new HttpError(400, 'Enter a valid email');
+  // Only company accounts can sign in, so don't invite anyone who could never join
+  const allowedDomain = (process.env.ALLOWED_DOMAIN || '').trim().toLowerCase();
+  if (allowedDomain && email.split('@')[1] !== allowedDomain) {
+    throw new HttpError(400, `Only @${allowedDomain} email addresses can be invited`);
+  }
   if (!['admin', 'member', 'viewer'].includes(role)) throw new HttpError(400, 'Invalid role');
   if (role === 'admin' && myRole !== 'owner') throw new HttpError(403, 'Only the owner can add admins');
 
@@ -91,15 +97,26 @@ router.post('/:spaceId/members', ah(async (req, res) => {
     const existing = await db.query('SELECT role FROM space_members WHERE space_id = ? AND user_id = ?', [spaceId, user.id]);
     if (existing[0].length) throw new HttpError(409, 'This person is already a member');
     await db.query('INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, ?)', [spaceId, user.id, role]);
-    notify(req, spaceId, { type: 'members' });
-    return res.status(201).json({ added: true });
+  } else {
+    await db.query(
+      'INSERT INTO space_invites (space_id, email, role, invited_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)',
+      [spaceId, email, role, req.user.id]
+    );
   }
-  await db.query(
-    'INSERT INTO space_invites (space_id, email, role, invited_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)',
-    [spaceId, email, role, req.user.id]
-  );
   notify(req, spaceId, { type: 'members' });
-  res.status(201).json({ invited: true });
+
+  // Let the person know by email. A failed email never undoes the membership/invite.
+  const [[space]] = await db.query('SELECT name FROM spaces WHERE id = ?', [spaceId]);
+  const [[inviter]] = await db.query('SELECT name, email FROM users WHERE id = ?', [req.user.id]);
+  const emailSent = await sendSpaceInvite({
+    to: email,
+    inviterName: inviter?.name || inviter?.email || 'A teammate',
+    inviterEmail: inviter?.email,
+    spaceName: space?.name || 'a space',
+    role,
+    alreadyUser: Boolean(user),
+  });
+  res.status(201).json(user ? { added: true, emailSent } : { invited: true, emailSent });
 }));
 
 // PATCH /api/spaces/:spaceId/members/:userId { role } — admin+

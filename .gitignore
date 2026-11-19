@@ -3,6 +3,9 @@ node_modules/
 dist/
 dist-demo/
 
+# Files people upload in chats (live data, not code)
+server/uploads/
+
 # Secrets – never commit
 .env
 *.env
@@ -13,6 +16,9 @@ dist-demo/
 *.pdf
 db/
 tasksphere-schema.sql
+# Original brand artwork (the app uses resized copies in client/public/)
+/icon.png
+/logo.png
 
 # OS / editor
 .DS_Store

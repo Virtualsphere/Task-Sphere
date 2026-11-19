@@ -4,7 +4,9 @@ import { getSocket } from '../socket';
 import { useAuth } from '../AuthContext';
 import { fmtTime } from '../util';
 import Avatar from './Avatar';
-import { MeetingCard, HuddleEvent } from './ChatCards';
+import { MeetingCard, HuddleEvent, applyMeetingUpdate } from './ChatCards';
+import FileMessage from './FileMessage';
+import { useChatFiles, AttachButton, PendingFiles, DropHint } from './ChatFiles';
 import { HuddleButton } from '../huddle/HuddleWindow';
 
 // Space chat — only members of the space can load history, join the room or send
@@ -15,6 +17,7 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
   const [typing, setTyping] = useState('');
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
+  const chat = useChatFiles(`/spaces/${spaceId}/attachments`);
   const bottomRef = useRef(null);
   const typingTimer = useRef(null);
   const lastTypingSent = useRef(0);
@@ -40,11 +43,14 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
       clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setTyping(''), 2500);
     };
+    const onMeetingUpdated = (u) => setMessages((prev) => applyMeetingUpdate(prev, u));
     socket.on('chat:message', onMsg);
     socket.on('chat:typing', onTyping);
+    socket.on('meeting:updated', onMeetingUpdated);
     return () => {
       socket.off('chat:message', onMsg);
       socket.off('chat:typing', onTyping);
+      socket.off('meeting:updated', onMeetingUpdated);
     };
   }, [spaceId, user.id]);
 
@@ -55,9 +61,15 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
     setMessages((prev) => [...older, ...prev]);
   };
 
-  const send = (e) => {
+  const send = async (e) => {
     e.preventDefault();
+    if (chat.upload) return;
     const body = text.trim();
+    if (chat.files.length) {
+      // Files go one by one; the typed text is sent as the caption of the first file
+      if (await chat.sendFiles(body)) setText('');
+      return;
+    }
     if (!body) return;
     getSocket().emit('chat:send', { spaceId: Number(spaceId), body }, (res) => {
       if (res?.error) setError(res.error);
@@ -74,7 +86,8 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
   };
 
   return (
-    <aside className="chat-panel">
+    <aside className={`chat-panel ${chat.dragging ? 'drag-over' : ''}`} {...chat.dragProps}>
+      <DropHint chat={chat} label={spaceName || 'the space'} />
       <div className="chat-head">
         <strong className="grow">💬 Space chat</strong>
         <HuddleButton scope="space" id={spaceId} title={spaceName} compact />
@@ -93,7 +106,9 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
               {!mine && !grouped && <Avatar user={{ name: m.name, avatar_url: m.avatar_url }} size={24} />}
               <div className={`msg-bubble ${m.kind === 'meeting' ? 'plain' : ''}`}>
                 {!grouped && <div className="msg-meta">{mine ? 'You' : m.name} · {fmtTime(m.created_at)}</div>}
-                {m.kind === 'meeting' ? <MeetingCard body={m.body} /> : <div className="msg-text">{m.body}</div>}
+                {m.kind === 'meeting' ? <MeetingCard body={m.body} />
+                  : m.kind === 'file' ? <FileMessage body={m.body} />
+                  : <div className="msg-text">{m.body}</div>}
               </div>
             </div>
           );
@@ -101,10 +116,13 @@ export default function ChatPanel({ spaceId, spaceName, canSchedule, onSchedule,
         <div ref={bottomRef} />
       </div>
       <div className="typing muted small">{typing}</div>
-      {error && <p className="error small">{error}</p>}
+      {(error || chat.error) && <p className="error small">{error || chat.error}</p>}
+      <PendingFiles chat={chat} />
       <form className="chat-input" onSubmit={send}>
-        <input value={text} onChange={(e) => onType(e.target.value)} placeholder="Message the space…" maxLength={4000} />
-        <button className="btn primary" disabled={!text.trim()}>Send</button>
+        <AttachButton chat={chat} />
+        <input value={text} onChange={(e) => onType(e.target.value)} onPaste={chat.onPaste}
+          placeholder={chat.files.length ? 'Add a message (optional)' : 'Message the space…'} maxLength={4000} />
+        <button className="btn primary" disabled={!!chat.upload || (!text.trim() && !chat.files.length)}>{chat.upload ? 'Sending…' : 'Send'}</button>
       </form>
     </aside>
   );

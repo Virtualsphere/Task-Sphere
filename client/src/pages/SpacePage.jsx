@@ -34,7 +34,8 @@ export default function SpacePage() {
     const s = getSocket();
     s.on('meeting:new', loadMeetings);
     s.on('meeting:cancelled', loadMeetings);
-    return () => { s.off('meeting:new', loadMeetings); s.off('meeting:cancelled', loadMeetings); };
+    s.on('meeting:updated', loadMeetings);
+    return () => { s.off('meeting:new', loadMeetings); s.off('meeting:cancelled', loadMeetings); s.off('meeting:updated', loadMeetings); };
   }, [loadMeetings]);
 
   const loadSpace = useCallback(

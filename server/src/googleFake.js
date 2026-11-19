@@ -72,6 +72,12 @@ async function request(userId, { method = 'GET', path, params = {}, data = {} })
     return { items };
   }
 
+  // Edit: a new Meet link only when one is being added; otherwise the caller keeps the old one
+  if (method === 'PATCH' && path.startsWith('/calendars/primary/events/')) {
+    const id = decodeURIComponent(path.split('/').pop());
+    return { id, htmlLink: null, ...(data.conferenceData?.createRequest ? { hangoutLink: `https://meet.google.com/${meetCode()}` } : {}) };
+  }
+
   if (method === 'GET' && path.startsWith('/calendars/primary/events/')) {
     return { id: decodeURIComponent(path.split('/').pop()) };
   }

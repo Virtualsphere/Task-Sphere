@@ -3,6 +3,11 @@ import { useHuddle } from '../huddle/HuddleContext';
 
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
+// A meeting was edited: update its card(s) in a loaded message list
+export function applyMeetingUpdate(messages, { meeting, card }) {
+  return messages.map((m) => (m.kind === 'meeting' && parse(m.body)?.meeting_id === meeting.id ? { ...m, body: card } : m));
+}
+
 export function fmtRange(start, end) {
   const s = new Date(start);
   const e = new Date(end);

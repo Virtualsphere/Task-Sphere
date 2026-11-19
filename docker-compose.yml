@@ -27,6 +27,8 @@ services:
         condition: service_healthy
     ports:
       - "5000:5000"
+    volumes:
+      - uploads:/app/server/uploads   # files shared in chats survive rebuilds
     environment:
       PORT: 5000
       TZ: Asia/Kolkata
@@ -46,3 +48,4 @@ services:
 
 volumes:
   dbdata:
+  uploads:

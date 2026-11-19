@@ -9,7 +9,9 @@ import TopBar from '../components/TopBar';
 import Avatar from '../components/Avatar';
 import Modal from '../components/Modal';
 import ScheduleMeetingModal from '../components/ScheduleMeetingModal';
-import { MeetingCard, HuddleEvent } from '../components/ChatCards';
+import { MeetingCard, HuddleEvent, applyMeetingUpdate } from '../components/ChatCards';
+import FileMessage, { filePreviewText } from '../components/FileMessage';
+import { useChatFiles, AttachButton, PendingFiles, DropHint } from '../components/ChatFiles';
 import { HuddleButton } from '../huddle/HuddleWindow';
 import { useHuddle } from '../huddle/HuddleContext';
 
@@ -26,6 +28,7 @@ function preview(c, meId) {
   const who = m.user_id === meId ? 'You: ' : c.type === 'group' ? `${m.name.split(' ')[0]}: ` : '';
   if (m.kind === 'meeting') return `${who}📅 Meeting scheduled`;
   if (m.kind === 'huddle') return '🎧 Huddle';
+  if (m.kind === 'file') return who + filePreviewText(m.body);
   return who + m.body;
 }
 
@@ -149,6 +152,7 @@ function Thread({ conv, people, onChanged }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [meetings, setMeetings] = useState([]);
+  const chat = useChatFiles(`/conversations/${conv.id}/attachments`);
   const bottom = useRef(null);
   const typingTimer = useRef(null);
   const lastTyping = useRef(0);
@@ -180,9 +184,11 @@ function Thread({ conv, people, onChanged }) {
       clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setTyping(''), 2500);
     };
+    const onMeetingUpdated = (u) => { setMessages((prev) => applyMeetingUpdate(prev, u)); loadMeetings(); };
     s.on('dm:message', onMsg);
     s.on('dm:typing', onTyping);
-    return () => { s.off('dm:message', onMsg); s.off('dm:typing', onTyping); };
+    s.on('meeting:updated', onMeetingUpdated);
+    return () => { s.off('dm:message', onMsg); s.off('dm:typing', onTyping); s.off('meeting:updated', onMeetingUpdated); };
   }, [conv.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadOlder = async () => {
@@ -191,9 +197,15 @@ function Thread({ conv, people, onChanged }) {
     setMessages((m) => [...older, ...m]);
   };
 
-  const send = (e) => {
+  const send = async (e) => {
     e.preventDefault();
+    if (chat.upload) return;
     const body = text.trim();
+    if (chat.files.length) {
+      // Files go one by one; the typed text is sent as the caption of the first file
+      if (await chat.sendFiles(body)) setText('');
+      return;
+    }
     if (!body) return;
     getSocket().emit('dm:send', { conversationId: conv.id, body }, (r) => r?.error && setError(r.error));
     setText('');
@@ -216,7 +228,8 @@ function Thread({ conv, people, onChanged }) {
   };
 
   return (
-    <div className="thread">
+    <div className={`thread ${chat.dragging ? 'drag-over' : ''}`} {...chat.dragProps}>
+      <DropHint chat={chat} label={title} />
       <div className="thread-head">
         <div className="conv-avatar">
           {other ? <Avatar user={other} size={38} /> : <span className="group-avatar big">👥</span>}
@@ -262,7 +275,9 @@ function Thread({ conv, people, onChanged }) {
               {!mine && !grouped && <Avatar user={{ name: m.name, avatar_url: m.avatar_url }} size={26} />}
               <div className={`msg-bubble ${m.kind === 'meeting' ? 'plain' : ''}`}>
                 {!grouped && <div className="msg-meta">{mine ? 'You' : m.name} · {fmtTime(m.created_at)}</div>}
-                {m.kind === 'meeting' ? <MeetingCard body={m.body} /> : <div className="msg-text">{m.body}</div>}
+                {m.kind === 'meeting' ? <MeetingCard body={m.body} />
+                  : m.kind === 'file' ? <FileMessage body={m.body} />
+                  : <div className="msg-text">{m.body}</div>}
               </div>
             </div>
           );
@@ -270,10 +285,13 @@ function Thread({ conv, people, onChanged }) {
         <div ref={bottom} />
       </div>
       <div className="typing muted small">{typing}</div>
-      {error && <p className="error small pad">{error}</p>}
+      {(error || chat.error) && <p className="error small pad">{error || chat.error}</p>}
+      <PendingFiles chat={chat} />
       <form className="chat-input" onSubmit={send}>
-        <input value={text} onChange={(e) => onType(e.target.value)} placeholder={`Message ${title}`} maxLength={4000} autoFocus />
-        <button className="btn primary" disabled={!text.trim()}>Send</button>
+        <AttachButton chat={chat} />
+        <input value={text} onChange={(e) => onType(e.target.value)} onPaste={chat.onPaste}
+          placeholder={chat.files.length ? 'Add a message (optional)' : `Message ${title}`} maxLength={4000} autoFocus />
+        <button className="btn primary" disabled={!!chat.upload || (!text.trim() && !chat.files.length)}>{chat.upload ? 'Sending…' : 'Send'}</button>
       </form>
 
       {showSchedule && (
