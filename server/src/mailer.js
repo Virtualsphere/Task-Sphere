@@ -89,4 +89,77 @@ async function sendSpaceInvite({ to, inviterName, inviterEmail, spaceName, role,
   }
 }
 
-module.exports = { mailEnabled: enabled, sendSpaceInvite };
+// ---------- Notification emails (huddle started, @mentions) ----------
+
+// Same look as the invite email: a short message and one button
+function card({ heading, lines, button, url, footer }) {
+  return `<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f4f5fb;font-family:Arial,Helvetica,sans-serif;color:#1f2937">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb">
+    <tr><td style="padding:28px 28px 8px">
+      <div style="font-size:18px;font-weight:bold;color:#4f46e5">TaskSphere</div>
+    </td></tr>
+    <tr><td style="padding:8px 28px 0;font-size:15px;line-height:1.6">
+      <p style="margin:0 0 12px;font-size:17px"><b>${heading}</b></p>
+      ${lines.map((l) => `<p style="margin:0 0 12px;color:#374151">${l}</p>`).join('')}
+    </td></tr>
+    <tr><td style="padding:8px 28px 28px">
+      <a href="${esc(url)}" style="display:inline-block;background:#6366f1;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold">${esc(button)}</a>
+      <p style="margin:16px 0 0;font-size:12px;color:#9ca3af">Or copy this link: ${esc(url)}</p>
+      ${footer ? `<p style="margin:8px 0 0;font-size:12px;color:#9ca3af">${footer}</p>` : ''}
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+async function send({ to, subject, text, html, replyTo }) {
+  if (!enabled || !to) return false;
+  try {
+    await transporter.sendMail({ from: { name: fromName, address: user }, replyTo, to, subject, text, html });
+    return true;
+  } catch (err) {
+    console.error(`Email "${subject}" to ${to} failed:`, err.message);
+    return false;
+  }
+}
+
+const absolute = (path) => `${appUrl}${path.startsWith('/') ? path : `/${path}`}`;
+
+/** Someone started a huddle you can join. `where` is e.g. "a 1:1 chat" or "the space “Sales”". Never throws. */
+function sendHuddleStarted({ to, starterName, starterEmail, where, direct, path }) {
+  const url = absolute(path);
+  const subject = direct ? `${starterName} is calling you on TaskSphere` : `${starterName} started a huddle in ${where}`;
+  const heading = direct ? `🎧 ${esc(starterName)} is calling you` : `🎧 ${esc(starterName)} started a huddle`;
+  const lines = [
+    direct ? `${esc(starterName)} started a huddle with you on TaskSphere.` : `A huddle is live in <b>${esc(where)}</b>. Join now to talk with the team.`,
+  ];
+  const text = [`${direct ? `${starterName} started a huddle with you.` : `${starterName} started a huddle in ${where}.`}`, '', `Join: ${url}`, '', '– TaskSphere'].join('\n');
+  return send({
+    to, subject, text,
+    html: card({ heading, lines, button: 'Join the huddle', url, footer: 'The huddle ends when everyone has left.' }),
+    replyTo: starterEmail ? { name: starterName, address: starterEmail } : undefined,
+  });
+}
+
+/** You were @mentioned. `where` is e.g. "the space “Sales”", "task #12 “Fix login”" or "a chat". Never throws. */
+function sendMention({ to, fromName: who, fromEmail, where, snippet, path }) {
+  const url = absolute(path);
+  const subject = `${who} mentioned you in ${where}`;
+  const quote = String(snippet || '').slice(0, 400);
+  const text = [`${who} mentioned you in ${where}:`, '', `"${quote}"`, '', `Open: ${url}`, '', '– TaskSphere'].join('\n');
+  return send({
+    to, subject, text,
+    html: card({
+      heading: `💬 ${esc(who)} mentioned you`,
+      lines: [
+        `In ${esc(where)}:`,
+        `<span style="display:block;border-left:3px solid #6366f1;padding:6px 12px;background:#f5f7ff;border-radius:4px;white-space:pre-wrap">${esc(quote)}</span>`,
+      ],
+      button: 'Open in TaskSphere',
+      url,
+    }),
+    replyTo: fromEmail ? { name: who, address: fromEmail } : undefined,
+  });
+}
+
+module.exports = { mailEnabled: enabled, sendSpaceInvite, sendHuddleStarted, sendMention, appUrl };

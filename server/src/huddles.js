@@ -4,8 +4,12 @@
 const db = require('./db');
 const { getRole } = require('./access');
 const svc = require('./chatService');
+const alerts = require('./alerts');
 
 const MAX = Number(process.env.HUDDLE_MAX || 8);
+// An incoming huddle keeps ringing for RING_TICK_MS x RING_TICKS (about 48 s) for people who haven't joined
+const RING_TICK_MS = 4000;
+const RING_TICKS = 12;
 const huddles = new Map(); // key -> huddle
 let nextId = 1;
 
@@ -83,6 +87,7 @@ async function leave(io, socket, reason = 'left') {
   io.to(`huddle:${key}`).emit('huddle:peer-left', { socketId: socket.id, reason });
   if (h.participants.size === 0) {
     huddles.delete(key);
+    clearInterval(h.ringTimer);
     const minutes = Math.max(1, Math.round((Date.now() - h.startedAt) / 60000));
     await postEvent(h.scope, h.scopeId, h.startedBy.id, { event: 'ended', minutes, peak: h.peak }).catch(() => {});
     await broadcastState(io, null, h.scope, h.scopeId, key);
@@ -140,10 +145,25 @@ function register(io, socket) {
       if (isNew) {
         // Ring everyone else who can join
         const ids = (await audienceIds(scope, id)).filter((x) => x !== u.id);
+        const path = scope === 'space' ? `/spaces/${Number(id)}?huddle=1` : `/messages/${Number(id)}?huddle=1`;
         for (const uid of ids) {
           const t = h.type === 'direct' ? u.name : h.title;
-          io.to(svc.userRoom(uid)).emit('huddle:ring', { huddle: summary(h), title: t, from: { id: u.id, name: u.name, avatar_url: u.avatar_url } });
+          // In the app: ringtone + desktop notification (see client HuddleContext / notifications)
+          io.to(svc.userRoom(uid)).emit('huddle:ring', { huddle: summary(h), title: t, path, from: { id: u.id, name: u.name, avatar_url: u.avatar_url } });
         }
+        // Keep ringing: every few seconds, nudge everyone who hasn't joined yet. Socket messages are not
+        // slowed down in background tabs (timers are), so the desktop notification sounds again each time.
+        let ticks = 0;
+        h.ringTimer = setInterval(() => {
+          ticks += 1;
+          if (huddles.get(key) !== h || ticks > RING_TICKS) { clearInterval(h.ringTimer); return; }
+          const inCall = new Set([...h.participants.values()].map((p) => p.userId));
+          const waiting = ids.filter((uid) => !inCall.has(uid));
+          if (!waiting.length) { clearInterval(h.ringTimer); return; }
+          io.to(waiting.map(svc.userRoom)).emit('huddle:ring-tick', { key, n: ticks });
+        }, RING_TICK_MS);
+        // By email, for people who don't have the app open (once per 10 min per chat/space)
+        alerts.huddleStarted({ scope, scopeId: Number(id), starterId: u.id, title: h.title, type: h.type, recipientIds: ids });
         await postEvent(scope, Number(id), u.id, { event: 'started' }).catch(() => {});
       }
     } catch (e) {

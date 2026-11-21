@@ -232,6 +232,7 @@ export function HuddleProvider({ children }) {
     const res = await emitAck('huddle:status', { scope, id: Number(id) });
     const key = huddleKey(scope, id);
     setStates((s) => { const n = { ...s }; if (res?.huddle) n[key] = res.huddle; else delete n[key]; return n; });
+    return res?.huddle || null;
   }, []);
 
   const dismissRing = (key) => setRings((r) => r.filter((x) => x.huddle.key !== key));
@@ -250,7 +251,8 @@ export function HuddleProvider({ children }) {
     const onRing = (r) => {
       if (activeRef.current?.key === r.huddle.key) return;
       setRings((list) => [...list.filter((x) => x.huddle.key !== r.huddle.key), { ...r, at: Date.now() }]);
-      setTimeout(() => setRings((list) => list.filter((x) => x.huddle.key !== r.huddle.key || Date.now() - x.at < 30000)), 30500);
+      // Stop showing the call after ~50 s (the server re-rings for about 48 s)
+      setTimeout(() => setRings((list) => list.filter((x) => x.huddle.key !== r.huddle.key || Date.now() - x.at < 50000)), 50500);
     };
     const onEndedHere = ({ reason }) => { cleanup(); setNotice(reason); };
     const onReconnect = () => { if (activeRef.current) { cleanup(); setNotice('Connection lost – please rejoin the huddle'); } };

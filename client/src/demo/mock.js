@@ -690,9 +690,11 @@ function scheduleIncomingCall(u) {
     if (!c || !me || me.id !== u.id || HUDDLES.has(`conv:${c.id}`)) return;
     const h = startSim('conv', c.id, caller);
     simJoin(h, caller);
-    emitLocal('huddle:ring', { huddle: hSummary(h), title: userById(caller).name, from: pub(userById(caller)) });
+    emitLocal('huddle:ring', { huddle: hSummary(h), title: userById(caller).name, path: `/messages/${c.id}?huddle=1`, from: pub(userById(caller)) });
     // Caller hangs up if nobody joins
     h.timers.push(setTimeout(() => { if (!h.participants.some((p) => p.socketId.startsWith('me-'))) { h.participants = []; endIfEmpty(h); } }, 45000));
+    // Re-ring every 4 s like the real server does, until you join (endIfEmpty clears these timers)
+    h.timers.push(setInterval(() => { if (!h.participants.some((p) => p.socketId.startsWith('me-'))) emitLocal('huddle:ring-tick', { key: h.key || `conv:${c.id}` }); }, 4000));
   }, 9000);
 }
 

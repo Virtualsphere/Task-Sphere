@@ -12,6 +12,7 @@ import Modal from '../components/Modal';
 import ScheduleMeetingModal from '../components/ScheduleMeetingModal';
 import { MeetingCard, HuddleEvent, applyMeetingUpdate } from '../components/ChatCards';
 import FileMessage, { filePreviewText } from '../components/FileMessage';
+import { MentionText, MentionTextarea, encodeMentions, plainMentions } from '../components/ChatText';
 import { useChatFiles, AttachButton, PendingFiles, DropHint } from '../components/ChatFiles';
 import { HuddleButton } from '../huddle/HuddleWindow';
 import { useHuddle } from '../huddle/HuddleContext';
@@ -60,7 +61,7 @@ function preview(c, meId) {
   if (m.kind === 'meeting') return `${who}📅 Meeting scheduled`;
   if (m.kind === 'huddle') return '🎧 Huddle';
   if (m.kind === 'file') return who + filePreviewText(m.body);
-  return who + m.body;
+  return who + plainMentions(m.body);
 }
 
 export default function Messages() {
@@ -211,6 +212,7 @@ function Thread({ conv, people, onChanged }) {
   const bottom = useRef(null);
   const typingTimer = useRef(null);
   const lastTyping = useRef(0);
+  const picked = useRef(new Map()); // people chosen from the @ list
   const title = convTitle(conv, user.id);
   const other = conv.type === 'direct' ? otherOf(conv, user.id) : null;
   const messagesRef = useRef(messages);
@@ -267,15 +269,17 @@ function Thread({ conv, people, onChanged }) {
   const send = async (e) => {
     e.preventDefault();
     if (chat.upload) return;
-    const body = text.trim();
+    // "@Name" picked from the list becomes @[Name](id): the person gets an email and a notification
+    const body = encodeMentions(text.trim(), picked.current);
     if (chat.files.length) {
       // Files go one by one; the typed text is sent as the caption of the first file
-      if (await chat.sendFiles(body)) setText('');
+      if (await chat.sendFiles(body)) { setText(''); picked.current.clear(); }
       return;
     }
     if (!body) return;
     getSocket().emit('dm:send', { conversationId: conv.id, body }, (r) => r?.error && setError(r.error));
     setText('');
+    picked.current.clear();
   };
   const onType = (v) => {
     setText(v);
@@ -347,8 +351,8 @@ function Thread({ conv, people, onChanged }) {
               <div className={`msg-bubble ${m.kind === 'meeting' ? 'plain' : ''}`}>
                 {!grouped && <div className="msg-meta">{mine ? 'You' : m.name} · {fmtTime(m.created_at)}</div>}
                 {m.kind === 'meeting' ? <MeetingCard body={m.body} />
-                  : m.kind === 'file' ? <FileMessage body={m.body} />
-                  : <div className="msg-text">{m.body}</div>}
+                  : m.kind === 'file' ? <FileMessage body={m.body} meId={user.id} />
+                  : <MentionText text={m.body} meId={user.id} />}
                 {mine && <div className="msg-status"><Ticks msgId={m.id} conv={conv} meId={user.id} /></div>}
               </div>
             </div>
@@ -360,8 +364,11 @@ function Thread({ conv, people, onChanged }) {
       <PendingFiles chat={chat} />
       <form className="chat-input" onSubmit={send}>
         <AttachButton chat={chat} />
-        <input value={text} onChange={(e) => onType(e.target.value)} onPaste={chat.onPaste}
-          placeholder={chat.files.length ? 'Add a message (optional)' : `Message ${title}`} maxLength={4000} autoFocus />
+        <MentionTextarea value={text} onChange={onType} onPaste={chat.onPaste} rows={1} pickerAbove
+          members={conv.members} meId={user.id} picked={picked}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e); }}
+          placeholder={chat.files.length ? 'Add a message (optional)' : `Message ${title}${conv.type === 'group' ? ' (@ to mention)' : ''}`}
+          maxLength={4000} autoFocus />
         <button className="btn primary" disabled={!!chat.upload || (!text.trim() && !chat.files.length)}>{chat.upload ? 'Sending…' : 'Send'}</button>
       </form>
 

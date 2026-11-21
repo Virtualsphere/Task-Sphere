@@ -1,5 +1,6 @@
 // Floating huddle window (stays open while you move around the app) + incoming huddle toasts
 import { useEffect, useRef, useState } from 'react';
+import { AlertCards } from '../notify/NotificationCenter';
 import { useHuddle } from './HuddleContext';
 import Avatar from '../components/Avatar';
 
@@ -203,6 +204,7 @@ export default function HuddleWindow() {
           </div>
         ))}
         {notice && <div className="toast info">{notice}</div>}
+        <AlertCards />
       </div>
     </>
   );

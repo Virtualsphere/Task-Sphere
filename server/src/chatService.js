@@ -2,6 +2,7 @@
 const db = require('./db');
 const { HttpError } = require('./access');
 const presence = require('./presence');
+const alerts = require('./alerts');
 
 let io = null;
 const setIo = (instance) => { io = instance; };
@@ -112,8 +113,9 @@ const dmOut = (m) => ({
 
 // Insert a message into a 1:1/group conversation and push it live to every member
 async function postDirectMessage(convId, userId, body, kind = 'text') {
-  const text = String(body || '').trim();
+  let text = String(body || '').trim();
   if (!text) throw new HttpError(400, 'Message cannot be empty');
+  if (kind === 'text') text = await cleanConvMentions(convId, text.slice(0, 8000));
   const [r] = await db.query('INSERT INTO direct_messages (conversation_id, user_id, kind, body) VALUES (?, ?, ?, ?)',
     [convId, userId, kind, text.slice(0, 8000)]);
   await db.query('UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?', [convId]);
@@ -132,7 +134,23 @@ async function postDirectMessage(convId, userId, body, kind = 'text') {
       [r.insertId, convId, uid]);
     await emitReceipt(convId, uid);
   }
+  // @mentions: email + desktop notification for the people tagged
+  const mentionText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
+  if (mentionText.includes('@[')) {
+    convWhere(convId).then((where) => alerts.mentioned({
+      text: mentionText, fromId: userId, where, path: `/messages/${convId}`, tag: `dm-${msg.id}`,
+    })).catch(() => {});
+  }
   return msg;
+}
+
+const fileCaption = (body) => { try { return JSON.parse(body)?.caption || ''; } catch { return ''; } };
+
+// "the group chat “RFID Team”" or "a 1:1 chat" — used in notification emails
+async function convWhere(convId) {
+  const [[c]] = await db.query('SELECT type, name FROM conversations WHERE id = ?', [convId]);
+  if (c?.type === 'group') return c.name ? `the group chat “${c.name}”` : 'a group chat';
+  return 'a 1:1 chat';
 }
 
 // ---- Space chat: @mentions and replies ----
@@ -141,16 +159,23 @@ async function postDirectMessage(convId, userId, body, kind = 'text') {
 const MENTION_RE = /@\[([^\]\n]{1,100})\]\((\d+)\)/g;
 const plainMentions = (text) => String(text || '').replace(MENTION_RE, '@$1');
 
-async function cleanMentions(spaceId, text) {
+// Keeps only mentions of people returned by `lookup(ids)` (rows of { id, name }), with their real names
+async function cleanMentionsAmong(text, lookup) {
   if (!text.includes('@[')) return text;
   const ids = [...new Set([...text.matchAll(MENTION_RE)].map((m) => Number(m[2])))];
   if (!ids.length) return text;
-  const [rows] = await db.query(
-    `SELECT u.id, u.name FROM space_members m JOIN users u ON u.id = m.user_id WHERE m.space_id = ? AND u.id IN (?)`,
-    [spaceId, ids]);
+  const rows = await lookup(ids);
   const names = new Map(rows.map((r) => [r.id, String(r.name).replace(/[[\]\n]/g, '')]));
   return text.replace(MENTION_RE, (all, label, id) => (names.has(Number(id)) ? `@[${names.get(Number(id))}](${id})` : `@${label}`));
 }
+
+// Space chat and task comments: only members of the space can be mentioned
+const cleanMentions = (spaceId, text) => cleanMentionsAmong(text, async (ids) => (await db.query(
+  'SELECT u.id, u.name FROM space_members m JOIN users u ON u.id = m.user_id WHERE m.space_id = ? AND u.id IN (?)', [spaceId, ids]))[0]);
+
+// Personal / group chats: only members of the conversation can be mentioned
+const cleanConvMentions = (convId, text) => cleanMentionsAmong(text, async (ids) => (await db.query(
+  'SELECT u.id, u.name FROM conversation_members m JOIN users u ON u.id = m.user_id WHERE m.conversation_id = ? AND u.id IN (?)', [convId, ids]))[0]);
 
 // Short one-line text shown in the quoted block of a reply
 function replyPreview(kind, body) {
@@ -193,11 +218,22 @@ async function postSpaceMessage(spaceId, userId, body, kind = 'text', opts = {})
   const [[row]] = await db.query(`${SPACE_MSG_SELECT} WHERE m.id = ?`, [r.insertId]);
   const msg = spaceMsgOut(row);
   if (io) io.to(`space:${spaceId}`).emit('chat:message', msg);
+  // @mentions: email + desktop notification for the people tagged (they may not have the space open)
+  const mentionText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
+  if (mentionText.includes('@[')) {
+    db.query('SELECT name FROM spaces WHERE id = ?', [spaceId]).then(([[s]]) => alerts.mentioned({
+      text: mentionText, fromId: userId, where: `the space “${s?.name || 'Space'}” chat`,
+      path: `/spaces/${spaceId}?chat=1`, tag: `space-msg-${msg.id}`,
+    })).catch(() => {});
+  }
   return msg;
 }
 
 module.exports = {
   setIo, getIo, userRoom, teammateIds, contactIds, assertTeammates, convMemberIds, spaceMemberIds,
   emitReceipt, markAllDelivered, markRead,
-  assertConvMember, postDirectMessage, postSpaceMessage, dmOut, spaceMsgOut, SPACE_MSG_SELECT, cleanMentions,
+  assertConvMember, postDirectMessage, postSpaceMessage, dmOut, spaceMsgOut, SPACE_MSG_SELECT, cleanMentions, cleanConvMentions,
 };
+
+// Let the notification module push socket events (avoids a circular require)
+alerts.init(module.exports);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { getSocket } from '../socket';
 import { useAuth } from '../AuthContext';
@@ -85,6 +85,15 @@ export default function SpacePage() {
   }, [chatOpen, spaceId, user.id]);
 
   const toggleChat = (open) => { setChatOpen(open); store.set('pm_chat', open ? '1' : '0'); };
+
+  // Opened from a mention notification or email (…?chat=1): show the space chat
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    if (params.get('chat') !== '1') return;
+    toggleChat(true);
+    params.delete('chat');
+    setParams(params, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="app-shell"><TopBar /><div className="center"><p className="error">{error}</p><Link to="/">Back to spaces</Link></div></div>;
   if (!space) return <div className="app-shell"><TopBar /><div className="center muted">Loading space…</div></div>;

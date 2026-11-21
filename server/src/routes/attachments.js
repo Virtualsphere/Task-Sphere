@@ -24,6 +24,7 @@ function uploadRoute(getTarget, checkAccess, post) {
           [t.conversationId || null, t.spaceId || null, req.user.id, req.file.filename, name, mime, req.file.size]);
         let caption = String(req.body.caption || '').trim().slice(0, 2000);
         if (t.spaceId && caption) caption = await svc.cleanMentions(t.spaceId, caption);
+        if (t.conversationId && caption) caption = await svc.cleanConvMentions(t.conversationId, caption);
         const body = JSON.stringify({ id: r.insertId, name, size: req.file.size, mime, ...(caption && { caption }) });
         res.status(201).json(await post(t, req.user.id, body, req));
       } catch (e) {

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { ah, assertRole, spaceIdForList, spaceForTicket, HttpError, notify, ROLE_RANK } = require('../access');
 const { cleanMentions } = require('../chatService');
+const alerts = require('../alerts');
 const { cleanName, cleanMime, removeFiles, receiveOne, receiveMany, sendStored } = require('../files');
 
 const PRIORITIES = ['urgent', 'high', 'normal', 'low'];
@@ -226,15 +227,18 @@ router.post('/tickets/:ticketId/comments', ticketAccess('member'), receiveMany, 
   const ticketId = Number(req.params.ticketId);
   const info = req.ticketInfo;
   const files = req.files || [];
+  let body;
+  let commentId;
   try {
-    let body = String(req.body.body || '').trim().slice(0, 5000);
+    body = String(req.body.body || '').trim().slice(0, 5000);
     if (!body && !files.length) throw new HttpError(400, 'Write a comment or attach a file');
     if (body) body = await cleanMentions(info.space_id, body);
     const [r] = await db.query('INSERT INTO comments (ticket_id, user_id, body) VALUES (?, ?, ?)', [ticketId, req.user.id, body]);
+    commentId = r.insertId;
     try {
-      await saveAttachments(files, { ticketId, commentId: r.insertId, userId: req.user.id });
+      await saveAttachments(files, { ticketId, commentId, userId: req.user.id });
     } catch (e) {
-      await db.query('DELETE FROM comments WHERE id = ?', [r.insertId]);
+      await db.query('DELETE FROM comments WHERE id = ?', [commentId]);
       throw e;
     }
   } catch (e) {
@@ -242,6 +246,13 @@ router.post('/tickets/:ticketId/comments', ticketAccess('member'), receiveMany, 
     throw e;
   }
   notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId });
+  // @mentions: email + desktop notification; the link opens this task
+  if (body.includes('@[')) {
+    db.query('SELECT title FROM tickets WHERE id = ?', [ticketId]).then(([[t]]) => alerts.mentioned({
+      text: body, fromId: req.user.id, where: `a comment on task #${ticketId} “${t?.title || ''}”`,
+      path: `/spaces/${info.space_id}/lists/${info.list_id}?ticket=${ticketId}`, tag: `comment-${commentId}`,
+    })).catch(() => {});
+  }
   res.status(201).json(await loadTicket(ticketId));
 }));
 

@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { HuddleProvider } from './huddle/HuddleContext';
 import HuddleWindow from './huddle/HuddleWindow';
+import { NotificationProvider } from './notify/NotificationCenter';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import SpacePage from './pages/SpacePage';
@@ -24,20 +25,23 @@ export default function App() {
       </Routes>
     );
   }
-  // The huddle provider sits above the routes, so a call keeps going while you move around the app
+  // The huddle provider sits above the routes, so a call keeps going while you move around the app.
+  // The notification provider rings for huddles and shows alerts for mentions and messages on every page.
   return (
     <HuddleProvider>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/spaces/:spaceId" element={<SpacePage />} />
-        <Route path="/spaces/:spaceId/lists/:listId" element={<SpacePage />} />
-        <Route path="/messages" element={<Messages />} />
-        <Route path="/messages/:conversationId" element={<Messages />} />
-        <Route path="/calendar" element={<CalendarPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      <HuddleWindow />
-      <TestModeBanner />
+      <NotificationProvider>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/spaces/:spaceId" element={<SpacePage />} />
+          <Route path="/spaces/:spaceId/lists/:listId" element={<SpacePage />} />
+          <Route path="/messages" element={<Messages />} />
+          <Route path="/messages/:conversationId" element={<Messages />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+        <HuddleWindow />
+        <TestModeBanner />
+      </NotificationProvider>
     </HuddleProvider>
   );
 }

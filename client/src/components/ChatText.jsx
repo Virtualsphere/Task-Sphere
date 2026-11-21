@@ -70,7 +70,7 @@ export function MentionPicker({ items, active, onPick, onHover }) {
 
 // A textarea with the @ picker. `picked` is a ref to a Map of chosen people (id -> member);
 // pass the text through encodeMentions(text, picked.current) before saving.
-export const MentionTextarea = forwardRef(function MentionTextarea({ value, onChange, members, meId, picked, onKeyDown, ...rest }, ref) {
+export const MentionTextarea = forwardRef(function MentionTextarea({ value, onChange, members, meId, picked, onKeyDown, pickerAbove, ...rest }, ref) {
   const [mention, setMention] = useState(null);
   const [active, setActive] = useState(0);
   const options = mention ? filterMembers(members, mention.query, meId) : [];
@@ -101,7 +101,7 @@ export const MentionTextarea = forwardRef(function MentionTextarea({ value, onCh
   };
 
   return (
-    <div className="mention-wrap">
+    <div className={`mention-wrap ${pickerAbove ? 'above' : ''}`}>
       {mention && (
         <MentionPicker items={options} active={active} onHover={setActive}
           onPick={(u) => pick(u, ref && typeof ref !== 'function' ? ref.current : document.activeElement)} />

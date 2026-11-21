@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import { PRIORITIES, can, fmtDate, isOverdue, priorityOf, store } from '../util';
@@ -21,6 +21,15 @@ export default function ListView({ listId, space, version }) {
   const [error, setError] = useState('');
   const [view, setView] = useState(() => store.get('pm_view') || 'board');
   const [openTicket, setOpenTicket] = useState(null);
+  // Opened from a mention notification or email (…?ticket=12): open that task
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const id = Number(params.get('ticket'));
+    if (!id) return;
+    setOpenTicket(id);
+    params.delete('ticket');
+    setParams(params, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const [search, setSearch] = useState('');
   const [prioFilter, setPrioFilter] = useState('');
   const [mine, setMine] = useState(false);
