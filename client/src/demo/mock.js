@@ -588,6 +588,15 @@ route('DELETE', '/meetings/:id', ([id]) => {
   return { ok: true };
 });
 
+// ---------- file uploads/downloads: there is no server in the demo ----------
+export async function apiUpload() {
+  await new Promise((r) => setTimeout(r, 200));
+  throw new Error('File uploads are not available in the demo');
+}
+export async function apiBlob() {
+  throw new Error('Files are not available in the demo');
+}
+
 // ---------- api() — same signature as src/api.js ----------
 let lastQuery = '';
 export async function api(path, { method = 'GET', body } = {}) {

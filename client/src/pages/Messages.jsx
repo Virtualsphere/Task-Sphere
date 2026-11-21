@@ -122,7 +122,7 @@ export default function Messages() {
   return (
     <div className="app-shell">
       <TopBar />
-      <div className="messages-layout">
+      <div className={`messages-layout ${conversationId ? 'has-thread' : ''}`}>
         <aside className="conv-list">
           <div className="conv-list-head">
             <h3>Messages</h3>
@@ -298,6 +298,7 @@ function Thread({ conv, people, onChanged }) {
     <div className={`thread ${chat.dragging ? 'drag-over' : ''}`} {...chat.dragProps}>
       <DropHint chat={chat} label={title} />
       <div className="thread-head">
+        <button className="icon-btn back-btn show-md" onClick={() => navigate('/messages')} aria-label="Back to chats">←</button>
         <div className="conv-avatar">
           {other ? <Avatar user={other} size={38} online={other.online} /> : <span className="group-avatar big">👥</span>}
         </div>
@@ -309,15 +310,17 @@ function Thread({ conv, people, onChanged }) {
               : <GroupStatus conv={conv} meId={user.id} />}
           </div>
         </div>
-        <HuddleButton scope="conv" id={conv.id} title={title} />
-        <button className="btn small" onClick={() => setShowSchedule(true)}>📅 Schedule</button>
-        {conv.type === 'group' && (
-          <>
-            <button className="btn small" onClick={() => setShowAdd(true)} title="Add people">＋👤</button>
-            <button className="btn small" onClick={rename} title="Rename">✎</button>
-            <button className="btn small" onClick={leaveGroup} title="Leave group">⎋</button>
-          </>
-        )}
+        <div className="thread-actions">
+          <HuddleButton scope="conv" id={conv.id} title={title} />
+          <button className="btn small" onClick={() => setShowSchedule(true)} title="Schedule a Google Meet">📅 <span className="hide-sm">Schedule</span></button>
+          {conv.type === 'group' && (
+            <>
+              <button className="btn small" onClick={() => setShowAdd(true)} title="Add people" aria-label="Add people">＋👤</button>
+              <button className="btn small" onClick={rename} title="Rename" aria-label="Rename group">✎</button>
+              <button className="btn small" onClick={leaveGroup} title="Leave group" aria-label="Leave group">⎋</button>
+            </>
+          )}
+        </div>
       </div>
 
       {meetings.length > 0 && (

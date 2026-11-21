@@ -30,10 +30,12 @@ export default function SpacePage() {
   const [unread, setUnread] = useState(0);
   const [mentioned, setMentioned] = useState(false); // someone @mentioned me while chat was closed
   const [showSchedule, setShowSchedule] = useState(false);
+  const [navOpen, setNavOpen] = useState(false); // phones: the sidebar opens as a drawer
   const [meetings, setMeetings] = useState([]);
   const huddle = useHuddle();
   const loadMeetings = useCallback(() => api(`/meetings?space_id=${spaceId}`).then(setMeetings).catch(() => {}), [spaceId]);
   useEffect(() => { loadMeetings(); }, [loadMeetings]);
+  useEffect(() => { setNavOpen(false); }, [listId, spaceId]);
   useEffect(() => {
     const s = getSocket();
     s.on('meeting:new', loadMeetings);
@@ -92,10 +94,12 @@ export default function SpacePage() {
   return (
     <div className="app-shell">
       <TopBar>
-        <span className="crumb"><Link to="/">Spaces</Link> / <strong>{space.name}</strong></span>
+        <span className="crumb clamp1"><Link to="/" className="hide-sm">Spaces / </Link><strong>{space.name}</strong></span>
       </TopBar>
       <div className={`space-layout ${chatOpen ? 'with-chat' : ''}`}>
-        <nav className="sidebar">
+        {navOpen && <div className="drawer-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+        <nav className={`sidebar ${navOpen ? 'open' : ''}`} aria-label="Space">
+          <button className="icon-btn drawer-close show-sm" onClick={() => setNavOpen(false)} aria-label="Close menu">✕</button>
           <div className="sidebar-space">
             <div className="space-icon" style={{ background: space.color }}>{space.name[0]?.toUpperCase()}</div>
             <div>
@@ -119,11 +123,11 @@ export default function SpacePage() {
           ))}
 
           <div className="sidebar-section"><span>Team</span></div>
-          <button className="nav-item" onClick={() => setShowMembers(true)}>
+          <button className="nav-item" onClick={() => { setShowMembers(true); setNavOpen(false); }}>
             <div className="avatars">{space.members.slice(0, 4).map((m) => <Avatar key={m.id} user={m} size={22} />)}</div>
             <span className="grow">{space.members.length} members</span>
           </button>
-          <button className="nav-item" onClick={() => toggleChat(!chatOpen)}>
+          <button className="nav-item" onClick={() => { toggleChat(!chatOpen); setNavOpen(false); }}>
             💬 <span className="grow">Space chat</span>
             {unread > 0 && <span className="badge" title={mentioned ? 'You were mentioned' : undefined}>{mentioned ? '@ ' : ''}{unread}</span>}
           </button>
@@ -142,6 +146,14 @@ export default function SpacePage() {
         </nav>
 
         <main className="space-main">
+          {/* Phones: the sidebar is hidden, so this bar opens it and the chat */}
+          <div className="mobile-bar show-sm">
+            <button className="btn small" onClick={() => setNavOpen(true)} aria-label="Open lists and team">☰ <span className="clamp1">{space.lists.find((l) => String(l.id) === listId)?.name || 'Lists & team'}</span></button>
+            <span className="grow" />
+            <button className="btn small" onClick={() => toggleChat(!chatOpen)} aria-label="Space chat">
+              💬 Chat{unread > 0 && <span className="badge">{mentioned ? '@ ' : ''}{unread}</span>}
+            </button>
+          </div>
           {listId ? (
             <ListView key={listId} listId={listId} space={space} version={version} />
           ) : (
