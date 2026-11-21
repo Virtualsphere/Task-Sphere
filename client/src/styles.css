@@ -557,6 +557,13 @@ a.btn { display: inline-flex; align-items: center; gap: 6px; }
 .nav-icon { display: none; }
 /* Use the real visible height on mobile browsers (address bar), falling back to vh */
 .space-layout, .messages-layout { height: calc(100vh - var(--topbar-h) - var(--bottom-nav)); height: calc(100dvh - var(--topbar-h) - var(--bottom-nav)); }
+/* Each pane scrolls on its own; the page itself never scrolls. A grid row is "as tall as its content"
+   by default, which let long chats grow the whole page. minmax(0, 1fr) pins the row to the screen. */
+.space-layout, .messages-layout { grid-template-rows: minmax(0, 1fr); flex: none; overflow: hidden; }
+.sidebar, .space-main, .conv-list, .thread-area, .chat-panel { min-height: 0; }
+.conv-list { overscroll-behavior: contain; }
+.thread-area { overflow: hidden; }
+.thread-body, .chat-body { min-height: 0; overscroll-behavior: contain; }
 .thread-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .thread-head { flex-wrap: nowrap; }
 .thread-head .grow { min-width: 0; }
