@@ -25,8 +25,9 @@ export function useChatFiles(uploadPath) {
   };
 
   // Sends every chosen file; `caption` goes with the first one.
+  // `fields` (e.g. { replyTo }) are also sent with the first file.
   // Returns true when the caption was delivered (so the caller can clear the text box).
-  const sendFiles = async (caption) => {
+  const sendFiles = async (caption, fields = {}) => {
     setError('');
     const queue = files;
     const failed = [];
@@ -35,6 +36,7 @@ export function useChatFiles(uploadPath) {
       const fd = new FormData();
       fd.append('file', queue[i]);
       if (i === 0 && caption) fd.append('caption', caption);
+      if (i === 0) for (const [k, v] of Object.entries(fields)) if (v != null) fd.append(k, v);
       try {
         await apiUpload(uploadPath, fd, (p) => setUpload({ index: i, total: queue.length, progress: p }));
       } catch (err) {

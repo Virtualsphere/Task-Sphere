@@ -1,16 +1,18 @@
-// Personal (1:1) and group chats between teammates
+// Personal (1:1) and group chats with people from your organization or your spaces
 const router = require('express').Router();
 const db = require('../db');
 const { ah, HttpError } = require('../access');
 const presence = require('../presence');
 const svc = require('../chatService');
 
-// GET /api/people — everyone who shares a space with me (who I can chat with)
+// GET /api/people — everyone I can chat with: my organization (same company email domain)
+// plus anyone I share a space with. `teammate` marks people from my spaces.
 router.get('/people', ah(async (req, res) => {
-  const ids = await svc.teammateIds(req.user.id);
+  const ids = await svc.contactIds(req.user.id);
   if (!ids.length) return res.json([]);
-  const [rows] = await db.query('SELECT id, name, email, avatar_url FROM users WHERE id IN (?) ORDER BY name', [ids]);
-  res.json(rows.map((u) => ({ ...u, online: presence.isOnline(u.id) })));
+  const mates = new Set(await svc.teammateIds(req.user.id));
+  const [rows] = await db.query('SELECT id, name, email, avatar_url, last_seen_at FROM users WHERE id IN (?) ORDER BY name', [ids]);
+  res.json(rows.map((u) => ({ ...u, online: presence.isOnline(u.id), teammate: mates.has(u.id) })));
 }));
 
 async function loadConversations(userId, onlyId = null) {
@@ -26,14 +28,19 @@ async function loadConversations(userId, onlyId = null) {
   if (!convs.length) return [];
   const ids = convs.map((c) => c.id);
   const [members] = await db.query(
-    `SELECT cm.conversation_id, u.id, u.name, u.email, u.avatar_url FROM conversation_members cm
-       JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id IN (?) ORDER BY u.name`, [ids]);
+    `SELECT cm.conversation_id, cm.last_read_id, cm.last_delivered_id, u.id, u.name, u.email, u.avatar_url, u.last_seen_at
+       FROM conversation_members cm JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id IN (?) ORDER BY u.name`, [ids]);
   const [lasts] = await db.query(
-    `SELECT d.conversation_id, d.kind, d.body, d.created_at, d.user_id, u.name FROM direct_messages d
+    `SELECT d.id, d.conversation_id, d.kind, d.body, d.created_at, d.user_id, u.name FROM direct_messages d
        JOIN users u ON u.id = d.user_id
       WHERE d.id IN (SELECT MAX(id) FROM direct_messages WHERE conversation_id IN (?) GROUP BY conversation_id)`, [ids]);
   const byConv = {};
-  for (const m of members) (byConv[m.conversation_id] ||= []).push({ id: m.id, name: m.name, email: m.email, avatar_url: m.avatar_url, online: presence.isOnline(m.id) });
+  for (const m of members) {
+    (byConv[m.conversation_id] ||= []).push({
+      id: m.id, name: m.name, email: m.email, avatar_url: m.avatar_url, online: presence.isOnline(m.id), last_seen_at: m.last_seen_at,
+      last_read_id: m.last_read_id, last_delivered_id: m.last_delivered_id, // for ✓✓ / blue ✓✓ on my messages
+    });
+  }
   const lastBy = Object.fromEntries(lasts.map((l) => [l.conversation_id, l]));
   return convs.map((c) => ({ ...c, unread: Number(c.unread), members: byConv[c.id] || [], last_message: lastBy[c.id] || null }));
 }
@@ -122,11 +129,10 @@ router.post('/conversations/:id/messages', ah(async (req, res) => {
   res.status(201).json(await svc.postDirectMessage(Number(req.params.id), req.user.id, req.body.body));
 }));
 
-// POST /api/conversations/:id/read { last_id }
+// POST /api/conversations/:id/read { last_id } — also tells the senders (blue ✓✓)
 router.post('/conversations/:id/read', ah(async (req, res) => {
-  await svc.assertConvMember(req.params.id, req.user.id);
-  await db.query('UPDATE conversation_members SET last_read_id = GREATEST(last_read_id, ?) WHERE conversation_id = ? AND user_id = ?',
-    [Number(req.body.last_id) || 0, req.params.id, req.user.id]);
+  const conv = await svc.assertConvMember(req.params.id, req.user.id);
+  await svc.markRead(conv.id, req.user.id, req.body.last_id);
   res.json({ ok: true });
 }));
 

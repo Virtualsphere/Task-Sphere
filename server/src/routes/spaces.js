@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { ah, assertRole, HttpError, notify, ROLE_RANK } = require('../access');
 const { sendSpaceInvite } = require('../mailer');
+const svc = require('../chatService');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -172,13 +173,8 @@ router.get('/:spaceId/messages', ah(async (req, res) => {
   const spaceId = Number(req.params.spaceId);
   await assertRole(spaceId, req.user.id, 'viewer');
   const before = Number(req.query.before) || 2147483647;
-  const [rows] = await db.query(
-    `SELECT m.id, m.kind, m.body, m.created_at, u.id AS user_id, u.name, u.avatar_url
-       FROM messages m JOIN users u ON u.id = m.user_id
-      WHERE m.space_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT 50`,
-    [spaceId, before]
-  );
-  res.json(rows.reverse());
+  const [rows] = await db.query(`${svc.SPACE_MSG_SELECT} WHERE m.space_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT 50`, [spaceId, before]);
+  res.json(rows.reverse().map(svc.spaceMsgOut));
 }));
 
 module.exports = router;

@@ -7,6 +7,10 @@ import Avatar from './Avatar';
 import Modal from './Modal';
 import StatusEditor from './StatusEditor';
 import TicketModal from './TicketModal';
+import { plainMentions } from './ChatText';
+
+// Latest-comment preview: @[Name](id) tags as "@Name"; a comment with only files says so
+const commentText = (c) => plainMentions(c.body) || '📎 Attachment';
 
 const METHOD_LABEL = { SDLC: 'SDLC', AGILE: 'Agile', SCRUM: 'Scrum', KANBAN: 'Kanban', CUSTOM: 'Custom' };
 
@@ -155,7 +159,7 @@ export default function ListView({ listId, space, version }) {
                     <td>{fmtDate(t.start_date)}</td>
                     <td className={isOverdue(t.due_date, doneIds.has(t.status_id)) ? 'overdue' : ''}>{fmtDate(t.due_date)}</td>
                     <td>{t.subtask_total ? `${t.subtask_done}/${t.subtask_total}` : '–'}</td>
-                    <td className="latest-cell">{t.latest_comment ? <><strong>{t.latest_comment.name}:</strong> {t.latest_comment.body}</> : <span className="muted">–</span>}</td>
+                    <td className="latest-cell">{t.latest_comment ? <><strong>{t.latest_comment.name}:</strong> {commentText(t.latest_comment)}</> : <span className="muted">–</span>}</td>
                   </tr>
                 );
               })}
@@ -189,7 +193,7 @@ function TicketCard({ t, done, draggable, onDragStart, onClick }) {
       </div>
       <div className={`card-title ${done ? 'strike' : ''}`}>{t.title}</div>
       {t.latest_comment && (
-        <div className="card-comment"><strong>{t.latest_comment.name.split(' ')[0]}:</strong> {t.latest_comment.body}</div>
+        <div className="card-comment"><strong>{t.latest_comment.name.split(' ')[0]}:</strong> {commentText(t.latest_comment)}</div>
       )}
       <div className="card-foot">
         <div className="avatars">{t.assignees.slice(0, 3).map((a) => <Avatar key={a.id} user={a} size={22} />)}</div>

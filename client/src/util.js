@@ -15,10 +15,30 @@ export function fmtDate(d) {
   return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
+const parseDbTime = (d) => new Date(d.replace(' ', 'T') + (d.includes('Z') ? '' : 'Z'));
+
 export function fmtTime(d) {
   if (!d) return '';
-  const dt = new Date(d.replace(' ', 'T') + (d.includes('Z') ? '' : 'Z'));
-  return dt.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return parseDbTime(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// "Online", "last seen just now", "last seen today at 4:05 pm", "last seen yesterday at …", "last seen 12 Nov"
+export function fmtLastSeen(person) {
+  if (!person) return '';
+  if (person.online) return 'Online';
+  if (!person.last_seen_at) return 'Offline';
+  const dt = parseDbTime(person.last_seen_at);
+  if (Number.isNaN(dt.getTime())) return 'Offline';
+  const now = new Date();
+  const mins = Math.round((now - dt) / 60000);
+  if (mins < 1) return 'last seen just now';
+  if (mins < 60) return `last seen ${mins} min ago`;
+  const time = dt.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  const dayDiff = Math.round((new Date(now.toDateString()) - new Date(dt.toDateString())) / 86400000);
+  if (dayDiff === 0) return `last seen today at ${time}`;
+  if (dayDiff === 1) return `last seen yesterday at ${time}`;
+  if (dayDiff < 7) return `last seen ${dt.toLocaleDateString('en-IN', { weekday: 'long' })} at ${time}`;
+  return `last seen ${dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: dt.getFullYear() === now.getFullYear() ? undefined : 'numeric' })}`;
 }
 
 export function isOverdue(due, done) {

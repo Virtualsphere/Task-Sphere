@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS subtasks (
   id INT AUTO_INCREMENT PRIMARY KEY,
   ticket_id INT NOT NULL,
   title VARCHAR(255) NOT NULL,
+  description TEXT NULL,
   is_done TINYINT(1) NOT NULL DEFAULT 0,
   priority ENUM('urgent','high','normal','low') NOT NULL DEFAULT 'normal',
   assignee_id INT NULL,
@@ -219,5 +220,25 @@ CREATE TABLE IF NOT EXISTS chat_attachments (
   INDEX idx_att_space (space_id),
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Files on tasks: in the task description (subtask_id and comment_id NULL),
+-- in a subtask's description (subtask_id set), or on a comment (comment_id set).
+CREATE TABLE IF NOT EXISTS ticket_attachments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  ticket_id INT NOT NULL,
+  subtask_id INT NULL,
+  comment_id INT NULL,
+  user_id INT NOT NULL,
+  stored_name VARCHAR(80) NOT NULL UNIQUE,
+  original_name VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(150) NOT NULL,
+  size_bytes INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_tatt_ticket (ticket_id),
+  FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+  FOREIGN KEY (subtask_id) REFERENCES subtasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

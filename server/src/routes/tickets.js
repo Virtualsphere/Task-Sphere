@@ -1,6 +1,8 @@
 const router = require('express').Router();
 const db = require('../db');
 const { ah, assertRole, spaceIdForList, spaceForTicket, HttpError, notify, ROLE_RANK } = require('../access');
+const { cleanMentions } = require('../chatService');
+const { cleanName, cleanMime, removeFiles, receiveOne, receiveMany, sendStored } = require('../files');
 
 const PRIORITIES = ['urgent', 'high', 'normal', 'low'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -39,8 +41,42 @@ async function loadTicket(ticketId) {
   const [comments] = await db.query(
     `SELECT c.id, c.body, c.created_at, u.id AS user_id, u.name, u.avatar_url
        FROM comments c JOIN users u ON u.id = c.user_id WHERE c.ticket_id = ? ORDER BY c.id DESC`, [ticketId]);
-  return { ...ticket, assignees, subtasks, comments };
+  const [files] = await db.query(
+    `SELECT a.id, a.subtask_id, a.comment_id, a.user_id, a.original_name AS name, a.mime_type AS mime, a.size_bytes AS size, a.created_at
+       FROM ticket_attachments a WHERE a.ticket_id = ? ORDER BY a.id`, [ticketId]);
+  return {
+    ...ticket,
+    assignees,
+    attachments: files.filter((f) => !f.subtask_id && !f.comment_id),
+    subtasks: subtasks.map((s) => ({ ...s, attachments: files.filter((f) => f.subtask_id === s.id) })),
+    comments: comments.map((c) => ({ ...c, attachments: files.filter((f) => f.comment_id === c.id) })),
+  };
 }
+
+// Stored file names for attachments matching a WHERE clause (to delete them from disk after the rows go)
+async function storedNames(where, params) {
+  const [rows] = await db.query(`SELECT stored_name FROM ticket_attachments WHERE ${where}`, params);
+  return rows.map((r) => r.stored_name);
+}
+
+// Saves uploaded files as attachments of a ticket / subtask / comment
+async function saveAttachments(files, { ticketId, subtaskId = null, commentId = null, userId }) {
+  for (const f of files) {
+    await db.query(
+      `INSERT INTO ticket_attachments (ticket_id, subtask_id, comment_id, user_id, stored_name, original_name, mime_type, size_bytes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [ticketId, subtaskId, commentId, userId, f.filename, cleanName(f.originalname), cleanMime(f.mimetype), f.size]);
+  }
+}
+
+// Checks the user's role on the ticket BEFORE any upload bytes are accepted
+const ticketAccess = (minRole) => ah(async (req, res, next) => {
+  const info = await spaceForTicket(Number(req.params.ticketId));
+  if (!info) throw new HttpError(404, 'Ticket not found');
+  req.ticketInfo = info;
+  req.ticketRole = await assertRole(info.space_id, req.user.id, minRole);
+  next();
+});
 
 // POST /api/lists/:listId/tickets — member+
 router.post('/lists/:listId/tickets', ah(async (req, res) => {
@@ -115,7 +151,9 @@ router.delete('/tickets/:ticketId', ah(async (req, res) => {
   if (ROLE_RANK[role] < ROLE_RANK.admin && info.created_by !== req.user.id) {
     throw new HttpError(403, 'Only admins or the ticket creator can delete it');
   }
+  const names = await storedNames('ticket_id = ?', [ticketId]);
   await db.query('DELETE FROM tickets WHERE id = ?', [ticketId]);
+  removeFiles(names);
   notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId, deleted: true });
   res.json({ ok: true });
 }));
@@ -132,9 +170,10 @@ router.post('/tickets/:ticketId/subtasks', ah(async (req, res) => {
   const [assignee] = await validateMembers(info.space_id, req.body.assignee_id ? [req.body.assignee_id] : []);
   const priority = PRIORITIES.includes(req.body.priority) ? req.body.priority : 'normal';
   const [[{ maxPos }]] = await db.query('SELECT COALESCE(MAX(position), 0) AS maxPos FROM subtasks WHERE ticket_id = ?', [ticketId]);
+  const description = String(req.body.description || '').trim().slice(0, 20000) || null;
   await db.query(
-    'INSERT INTO subtasks (ticket_id, title, priority, assignee_id, due_date, position) VALUES (?, ?, ?, ?, ?, ?)',
-    [ticketId, title.slice(0, 255), priority, assignee || null, cleanDate(req.body.due_date), maxPos + 1]
+    'INSERT INTO subtasks (ticket_id, title, description, priority, assignee_id, due_date, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [ticketId, title.slice(0, 255), description, priority, assignee || null, cleanDate(req.body.due_date), maxPos + 1]
   );
   notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId });
   res.status(201).json(await loadTicket(ticketId));
@@ -152,7 +191,11 @@ router.patch('/subtasks/:id', ah(async (req, res) => {
   const b = req.body;
   const fields = [];
   const vals = [];
-  if (b.title !== undefined) { fields.push('title = ?'); vals.push(String(b.title).trim().slice(0, 255)); }
+  if (b.title !== undefined) {
+    if (!String(b.title).trim()) throw new HttpError(400, 'Subtask title cannot be empty');
+    fields.push('title = ?'); vals.push(String(b.title).trim().slice(0, 255));
+  }
+  if (b.description !== undefined) { fields.push('description = ?'); vals.push(String(b.description || '').slice(0, 20000) || null); }
   if (b.is_done !== undefined) { fields.push('is_done = ?'); vals.push(b.is_done ? 1 : 0); }
   if (b.priority !== undefined && PRIORITIES.includes(b.priority)) { fields.push('priority = ?'); vals.push(b.priority); }
   if (b.due_date !== undefined) { fields.push('due_date = ?'); vals.push(cleanDate(b.due_date)); }
@@ -168,21 +211,36 @@ router.patch('/subtasks/:id', ah(async (req, res) => {
 router.delete('/subtasks/:id', ah(async (req, res) => {
   const ctx = await subtaskContext(req.params.id);
   await assertRole(ctx.space_id, req.user.id, 'member');
+  const names = await storedNames('subtask_id = ?', [req.params.id]);
   await db.query('DELETE FROM subtasks WHERE id = ?', [req.params.id]);
+  removeFiles(names);
   notify(req, ctx.space_id, { type: 'tickets', listId: ctx.list_id, ticketId: ctx.ticketId });
   res.json(await loadTicket(ctx.ticketId));
 }));
 
 // ---------- Comments ----------
 
-router.post('/tickets/:ticketId/comments', ah(async (req, res) => {
+// POST /api/tickets/:ticketId/comments — member+. JSON { body } or multipart (body, files[] up to 10).
+// @mentions are written as @[Name](userId); only members of the space are kept.
+router.post('/tickets/:ticketId/comments', ticketAccess('member'), receiveMany, ah(async (req, res) => {
   const ticketId = Number(req.params.ticketId);
-  const info = await spaceForTicket(ticketId);
-  if (!info) throw new HttpError(404, 'Ticket not found');
-  await assertRole(info.space_id, req.user.id, 'member');
-  const body = (req.body.body || '').trim();
-  if (!body) throw new HttpError(400, 'Comment cannot be empty');
-  await db.query('INSERT INTO comments (ticket_id, user_id, body) VALUES (?, ?, ?)', [ticketId, req.user.id, body.slice(0, 5000)]);
+  const info = req.ticketInfo;
+  const files = req.files || [];
+  try {
+    let body = String(req.body.body || '').trim().slice(0, 5000);
+    if (!body && !files.length) throw new HttpError(400, 'Write a comment or attach a file');
+    if (body) body = await cleanMentions(info.space_id, body);
+    const [r] = await db.query('INSERT INTO comments (ticket_id, user_id, body) VALUES (?, ?, ?)', [ticketId, req.user.id, body]);
+    try {
+      await saveAttachments(files, { ticketId, commentId: r.insertId, userId: req.user.id });
+    } catch (e) {
+      await db.query('DELETE FROM comments WHERE id = ?', [r.insertId]);
+      throw e;
+    }
+  } catch (e) {
+    removeFiles(files.map((f) => f.path));
+    throw e;
+  }
   notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId });
   res.status(201).json(await loadTicket(ticketId));
 }));
@@ -193,9 +251,58 @@ router.delete('/comments/:id', ah(async (req, res) => {
   const info = await spaceForTicket(c.ticket_id);
   const role = await assertRole(info.space_id, req.user.id, 'viewer');
   if (c.user_id !== req.user.id && ROLE_RANK[role] < ROLE_RANK.admin) throw new HttpError(403, 'You can only delete your own comments');
+  const names = await storedNames('comment_id = ?', [req.params.id]);
   await db.query('DELETE FROM comments WHERE id = ?', [req.params.id]);
+  removeFiles(names);
   notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId: c.ticket_id });
   res.json(await loadTicket(c.ticket_id));
+}));
+
+// ---------- Attachments (task description, subtask description) ----------
+
+// POST /api/tickets/:ticketId/attachments — member+. Multipart: file, optional subtask_id.
+router.post('/tickets/:ticketId/attachments', ticketAccess('member'), receiveOne, ah(async (req, res) => {
+  const ticketId = Number(req.params.ticketId);
+  const info = req.ticketInfo;
+  try {
+    if (!req.file) throw new HttpError(400, 'Choose a file to attach');
+    let subtaskId = null;
+    if (req.body.subtask_id) {
+      const [[st]] = await db.query('SELECT id FROM subtasks WHERE id = ? AND ticket_id = ?', [Number(req.body.subtask_id), ticketId]);
+      if (!st) throw new HttpError(404, 'Subtask not found');
+      subtaskId = st.id;
+    }
+    await saveAttachments([req.file], { ticketId, subtaskId, userId: req.user.id });
+  } catch (e) {
+    removeFiles([req.file?.path]);
+    throw e;
+  }
+  notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId });
+  res.status(201).json(await loadTicket(ticketId));
+}));
+
+async function attachmentContext(id, userId, minRole) {
+  const [[att]] = await db.query('SELECT * FROM ticket_attachments WHERE id = ?', [Number(id)]);
+  if (!att) throw new HttpError(404, 'File not found');
+  const info = await spaceForTicket(att.ticket_id);
+  const role = await assertRole(info.space_id, userId, minRole);
+  return { att, info, role };
+}
+
+// GET /api/ticket-attachments/:id[?inline=1] — anyone who can see the ticket
+router.get('/ticket-attachments/:id', ah(async (req, res) => {
+  const { att } = await attachmentContext(req.params.id, req.user.id, 'viewer');
+  sendStored(req, res, att);
+}));
+
+// DELETE /api/ticket-attachments/:id — whoever added it, or an admin+
+router.delete('/ticket-attachments/:id', ah(async (req, res) => {
+  const { att, info, role } = await attachmentContext(req.params.id, req.user.id, 'member');
+  if (att.user_id !== req.user.id && ROLE_RANK[role] < ROLE_RANK.admin) throw new HttpError(403, 'You can only remove files you added');
+  await db.query('DELETE FROM ticket_attachments WHERE id = ?', [att.id]);
+  removeFiles([att.stored_name]);
+  notify(req, info.space_id, { type: 'tickets', listId: info.list_id, ticketId: att.ticket_id });
+  res.json(await loadTicket(att.ticket_id));
 }));
 
 module.exports = router;

@@ -1,9 +1,10 @@
 // A file shared in a chat: image preview, or a file card with a download button
 import { useEffect, useState } from 'react';
 import { apiBlob } from '../api';
+import { MentionText } from './ChatText';
 
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
 export function fmtSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -11,7 +12,7 @@ export function fmtSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function fileIcon(name, mime) {
+export function fileIcon(name, mime) {
   const ext = name.split('.').pop().toLowerCase();
   if (mime.startsWith('image/')) return '🖼️';
   if (mime.startsWith('video/')) return '🎬';
@@ -24,8 +25,8 @@ function fileIcon(name, mime) {
   return '📄';
 }
 
-async function download(f) {
-  const blob = await apiBlob(`/attachments/${f.id}`);
+export async function download(f, path = `/attachments/${f.id}`) {
+  const blob = await apiBlob(path);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -41,7 +42,7 @@ export function filePreviewText(body) {
   return f ? `📎 ${f.name}` : '📎 File';
 }
 
-export default function FileMessage({ body }) {
+export default function FileMessage({ body, meId }) {
   const f = parse(body);
   const [img, setImg] = useState(null);
   const [error, setError] = useState('');
@@ -82,7 +83,7 @@ export default function FileMessage({ body }) {
         </div>
         <button type="button" className="btn small" onClick={onDownload} disabled={busy}>{busy ? '…' : 'Download'}</button>
       </div>
-      {f.caption && <div className="msg-text file-caption">{f.caption}</div>}
+      {f.caption && <MentionText text={f.caption} meId={meId} className="msg-text file-caption" />}
       {error && <div className="error small">{error}</div>}
     </div>
   );

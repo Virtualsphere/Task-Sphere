@@ -46,6 +46,25 @@ const mysql = require('mysql2/promise');
       ADD INDEX idx_att_space (space_id),
       ADD CONSTRAINT fk_att_space FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE`);
   }
+  // v4 upgrade: space chat replies (quote a message, like WhatsApp)
+  if (!(await columnInfo('messages', 'reply_to_id'))) {
+    await conn.query(`ALTER TABLE messages
+      ADD COLUMN reply_to_id INT NULL AFTER body,
+      ADD CONSTRAINT fk_msg_reply FOREIGN KEY (reply_to_id) REFERENCES messages(id) ON DELETE SET NULL`);
+  }
+  // v5 upgrade: subtasks get a description
+  if (!(await columnInfo('subtasks', 'description'))) {
+    await conn.query('ALTER TABLE subtasks ADD COLUMN description TEXT NULL AFTER title');
+  }
+  // v6 upgrade: "last seen" and delivered ticks (✓✓) in personal chats
+  if (!(await columnInfo('users', 'last_seen_at'))) {
+    await conn.query('ALTER TABLE users ADD COLUMN last_seen_at TIMESTAMP NULL');
+  }
+  if (!(await columnInfo('conversation_members', 'last_delivered_id'))) {
+    await conn.query('ALTER TABLE conversation_members ADD COLUMN last_delivered_id INT NOT NULL DEFAULT 0 AFTER last_read_id');
+    // Treat everything already read as delivered
+    await conn.query('UPDATE conversation_members SET last_delivered_id = last_read_id');
+  }
   await conn.end();
   console.log(`Database "${dbName}" is ready.`);
 })().catch((err) => {

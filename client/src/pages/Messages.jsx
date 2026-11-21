@@ -1,10 +1,11 @@
-// Personal chats: 1:1 and group conversations with teammates, huddles and meeting scheduling
+// Personal chats: 1:1 and group conversations with anyone in your organization, huddles and meeting scheduling.
+// Shows who is online (green glow), when they were last seen, and ✓ sent / ✓✓ delivered / blue ✓✓ read.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { getSocket } from '../socket';
 import { useAuth } from '../AuthContext';
-import { fmtTime } from '../util';
+import { fmtTime, fmtLastSeen } from '../util';
 import TopBar from '../components/TopBar';
 import Avatar from '../components/Avatar';
 import Modal from '../components/Modal';
@@ -21,6 +22,36 @@ export function convTitle(c, meId) {
   return c.members.find((m) => m.id !== meId)?.name || 'Just you';
 }
 const otherOf = (c, meId) => c.members.find((m) => m.id !== meId);
+
+// Tick state of one of my messages: read when every other member has read it, delivered when it reached all of them
+export function receiptOf(msgId, conv, meId) {
+  const others = (conv?.members || []).filter((x) => x.id !== meId);
+  if (!others.length) return 'sent';
+  if (others.every((x) => (x.last_read_id || 0) >= msgId)) return 'read';
+  if (others.every((x) => (x.last_delivered_id || 0) >= msgId)) return 'delivered';
+  return 'sent';
+}
+
+function receiptTitle(msgId, conv, meId) {
+  const others = (conv?.members || []).filter((x) => x.id !== meId);
+  const first = (x) => x.name.split(' ')[0];
+  if (conv.type !== 'group') return { read: 'Read', delivered: 'Delivered', sent: 'Sent' }[receiptOf(msgId, conv, meId)];
+  const read = others.filter((x) => (x.last_read_id || 0) >= msgId);
+  const delivered = others.filter((x) => !read.includes(x) && (x.last_delivered_id || 0) >= msgId);
+  const parts = [];
+  if (read.length) parts.push(`Read by ${read.map(first).join(', ')}`);
+  if (delivered.length) parts.push(`Delivered to ${delivered.map(first).join(', ')}`);
+  return parts.join(' · ') || 'Sent';
+}
+
+export function Ticks({ msgId, conv, meId }) {
+  const state = receiptOf(msgId, conv, meId);
+  return (
+    <span className={`ticks ${state}`} title={receiptTitle(msgId, conv, meId)} aria-label={state}>
+      {state === 'sent' ? '✓' : '✓✓'}
+    </span>
+  );
+}
 
 function preview(c, meId) {
   const m = c.last_message;
@@ -41,6 +72,8 @@ export default function Messages() {
   const [people, setPeople] = useState([]);
   const [filter, setFilter] = useState('');
   const [showNew, setShowNew] = useState(false);
+  const [, setNow] = useState(0);
+  useEffect(() => { const t = setInterval(() => setNow((n) => n + 1), 60000); return () => clearInterval(t); }, []);
 
   const loadConvs = useCallback(() => api('/conversations').then(setConvs).catch(() => setConvs([])), []);
   const loadPeople = useCallback(() => api('/people').then(setPeople).catch(() => {}), []);
@@ -49,15 +82,27 @@ export default function Messages() {
   useEffect(() => {
     const s = getSocket();
     const refresh = () => loadConvs();
-    const onPresence = ({ userId, online }) => {
-      setPeople((p) => p.map((x) => (x.id === userId ? { ...x, online } : x)));
-      setConvs((cs) => cs && cs.map((c) => ({ ...c, members: c.members.map((m) => (m.id === userId ? { ...m, online } : m)) })));
+    const onPresence = ({ userId, online, last_seen_at }) => {
+      const upd = (x) => (x.id === userId ? { ...x, online, ...(last_seen_at ? { last_seen_at } : {}) } : x);
+      setPeople((p) => p.map(upd));
+      setConvs((cs) => cs && cs.map((c) => ({ ...c, members: c.members.map(upd) })));
+    };
+    // Someone's delivered/read position moved: update ticks
+    const onReceipt = ({ conversationId, userId, lastReadId, lastDeliveredId }) => {
+      setConvs((cs) => cs && cs.map((c) => (c.id !== conversationId ? c : {
+        ...c,
+        members: c.members.map((m) => (m.id === userId ? { ...m, last_read_id: lastReadId, last_delivered_id: lastDeliveredId } : m)),
+      })));
     };
     s.on('dm:message', refresh);
     s.on('conversation:new', refresh);
     s.on('conversation:updated', refresh);
     s.on('presence', onPresence);
-    return () => { s.off('dm:message', refresh); s.off('conversation:new', refresh); s.off('conversation:updated', refresh); s.off('presence', onPresence); };
+    s.on('dm:receipt', onReceipt);
+    return () => {
+      s.off('dm:message', refresh); s.off('conversation:new', refresh); s.off('conversation:updated', refresh);
+      s.off('presence', onPresence); s.off('dm:receipt', onReceipt);
+    };
   }, [loadConvs]);
 
   const openDirect = async (personId) => {
@@ -68,7 +113,11 @@ export default function Messages() {
 
   const current = convs?.find((c) => String(c.id) === conversationId);
   const shown = (convs || []).filter((c) => convTitle(c, user.id).toLowerCase().includes(filter.toLowerCase()));
-  const noChatWith = people.filter((p) => !(convs || []).some((c) => c.type === 'direct' && c.members.some((m) => m.id === p.id)));
+  const q = filter.trim().toLowerCase();
+  const noChatWith = people
+    .filter((p) => !(convs || []).some((c) => c.type === 'direct' && c.members.some((m) => m.id === p.id)))
+    .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q))
+    .sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
 
   return (
     <div className="app-shell">
@@ -79,7 +128,7 @@ export default function Messages() {
             <h3>Messages</h3>
             <button className="btn primary small" onClick={() => setShowNew(true)}>+ New</button>
           </div>
-          <input className="conv-search" placeholder="Search chats…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <input className="conv-search" placeholder="Search chats and people…" value={filter} onChange={(e) => setFilter(e.target.value)} />
           {convs === null && <p className="muted small pad">Loading…</p>}
           {shown.map((c) => {
             const other = c.type === 'direct' ? otherOf(c, user.id) : null;
@@ -87,8 +136,7 @@ export default function Messages() {
             return (
               <Link key={c.id} to={`/messages/${c.id}`} className={`conv-item ${String(c.id) === conversationId ? 'active' : ''}`}>
                 <div className="conv-avatar">
-                  {other ? <Avatar user={other} size={36} /> : <span className="group-avatar">👥</span>}
-                  {other?.online && <span className="online-dot" />}
+                  {other ? <Avatar user={other} size={36} online={other.online} /> : <span className="group-avatar">👥</span>}
                 </div>
                 <div className="grow">
                   <div className="row spread-row">
@@ -96,7 +144,11 @@ export default function Messages() {
                     <span className="muted small nowrap">{c.last_message ? fmtTime(c.last_message.created_at).split(',').pop() : ''}</span>
                   </div>
                   <div className="row spread-row">
-                    <span className={`small clamp1 ${c.unread ? '' : 'muted'}`}>{live ? <span className="live-text">🎧 Huddle live · {live.participants.length}</span> : preview(c, user.id)}</span>
+                    <span className={`small clamp1 ${c.unread ? '' : 'muted'}`}>
+                      {live ? <span className="live-text">🎧 Huddle live · {live.participants.length}</span> : (
+                        <>{c.last_message?.user_id === user.id && c.last_message.id && <Ticks msgId={c.last_message.id} conv={c} meId={user.id} />} {preview(c, user.id)}</>
+                      )}
+                    </span>
                     {c.unread > 0 && <span className="badge">{c.unread}</span>}
                   </div>
                 </div>
@@ -105,18 +157,21 @@ export default function Messages() {
           })}
           {noChatWith.length > 0 && (
             <>
-              <div className="sidebar-section"><span>Teammates</span></div>
+              <div className="sidebar-section"><span>People in your organization</span><span>{noChatWith.length}</span></div>
               {noChatWith.map((p) => (
                 <button key={p.id} className="conv-item" onClick={() => openDirect(p.id)}>
-                  <div className="conv-avatar"><Avatar user={p} size={30} />{p.online && <span className="online-dot" />}</div>
-                  <span className="grow clamp1">{p.name}</span>
+                  <div className="conv-avatar"><Avatar user={p} size={30} online={p.online} /></div>
+                  <div className="grow">
+                    <div className="clamp1">{p.name}</div>
+                    <div className={`small clamp1 ${p.online ? 'online-text' : 'muted'}`}>{fmtLastSeen(p)}</div>
+                  </div>
                   <span className="muted small">Chat</span>
                 </button>
               ))}
             </>
           )}
           {convs && !convs.length && !people.length && (
-            <p className="muted small pad">Join or create a space to chat with teammates.</p>
+            <p className="muted small pad">Nobody else from your organization has signed in yet.</p>
           )}
         </aside>
 
@@ -126,7 +181,7 @@ export default function Messages() {
           ) : (
             <div className="empty thread-empty">
               <h3>💬 Personal chats & huddles</h3>
-              <p className="muted">Message a teammate, start a group, jump into a huddle, or schedule a Google Meet.</p>
+              <p className="muted">Message anyone in your organization, start a group, jump into a huddle, or schedule a Google Meet.</p>
               <button className="btn primary" onClick={() => setShowNew(true)}>Start a conversation</button>
             </div>
           )}
@@ -158,11 +213,23 @@ function Thread({ conv, people, onChanged }) {
   const lastTyping = useRef(0);
   const title = convTitle(conv, user.id);
   const other = conv.type === 'direct' ? otherOf(conv, user.id) : null;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const lastMarked = useRef(0);
 
+  // Only counts as read while this window is actually being looked at (blue ✓✓ for the sender)
   const markRead = (list) => {
     const last = list[list.length - 1];
-    if (last) api(`/conversations/${conv.id}/read`, { method: 'POST', body: { last_id: last.id } }).then(() => window.dispatchEvent(new Event('pm:read'))).catch(() => {});
+    if (!last || last.id <= lastMarked.current || document.visibilityState !== 'visible') return;
+    lastMarked.current = last.id;
+    api(`/conversations/${conv.id}/read`, { method: 'POST', body: { last_id: last.id } }).then(() => window.dispatchEvent(new Event('pm:read'))).catch(() => {});
   };
+  useEffect(() => {
+    const onVisible = () => markRead(messagesRef.current);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible); };
+  }, [conv.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadMeetings = () => api(`/meetings?conversation_id=${conv.id}`).then(setMeetings).catch(() => {});
 
   useEffect(() => {
@@ -232,13 +299,14 @@ function Thread({ conv, people, onChanged }) {
       <DropHint chat={chat} label={title} />
       <div className="thread-head">
         <div className="conv-avatar">
-          {other ? <Avatar user={other} size={38} /> : <span className="group-avatar big">👥</span>}
-          {other?.online && <span className="online-dot" />}
+          {other ? <Avatar user={other} size={38} online={other.online} /> : <span className="group-avatar big">👥</span>}
         </div>
         <div className="grow">
           <strong>{title}</strong>
-          <div className="muted small">
-            {other ? (other.online ? 'Online' : other.email) : `${conv.members.length} members · ${conv.members.map((m) => m.name.split(' ')[0]).join(', ')}`}
+          <div className={`small ${other?.online && !typing ? 'online-text' : 'muted'}`}>
+            {typing ? <span className="typing-text">{typing}</span>
+              : other ? <span title={other.email}>{fmtLastSeen(other)}</span>
+              : <GroupStatus conv={conv} meId={user.id} />}
           </div>
         </div>
         <HuddleButton scope="conv" id={conv.id} title={title} />
@@ -278,13 +346,13 @@ function Thread({ conv, people, onChanged }) {
                 {m.kind === 'meeting' ? <MeetingCard body={m.body} />
                   : m.kind === 'file' ? <FileMessage body={m.body} />
                   : <div className="msg-text">{m.body}</div>}
+                {mine && <div className="msg-status"><Ticks msgId={m.id} conv={conv} meId={user.id} /></div>}
               </div>
             </div>
           );
         })}
         <div ref={bottom} />
       </div>
-      <div className="typing muted small">{typing}</div>
       {(error || chat.error) && <p className="error small pad">{error || chat.error}</p>}
       <PendingFiles chat={chat} />
       <form className="chat-input" onSubmit={send}>
@@ -307,23 +375,38 @@ function Thread({ conv, people, onChanged }) {
   );
 }
 
-function NewChatModal({ people, onClose, onDirect, onGroup }) {
+// "3 of 5 online · Aarav, Riya, …" under a group's name
+function GroupStatus({ conv, meId }) {
+  const others = conv.members.filter((m) => m.id !== meId);
+  const online = others.filter((m) => m.online).length;
+  return (
+    <span>
+      {conv.members.length} members{online ? <> · <span className="online-text">{online} online</span></> : ''} · {conv.members.map((m) => m.name.split(' ')[0]).join(', ')}
+    </span>
+  );
+}
+
+function NewChatModal({ people: everyone, onClose, onDirect, onGroup }) {
   const [mode, setMode] = useState('direct');
   const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const term = q.trim().toLowerCase();
+  const people = everyone.filter((p) => !term || p.name.toLowerCase().includes(term) || (p.email || '').toLowerCase().includes(term));
   return (
     <Modal title="New conversation" onClose={onClose}>
       <div className="seg full">
         <button className={mode === 'direct' ? 'active' : ''} onClick={() => setMode('direct')}>Direct message</button>
         <button className={mode === 'group' ? 'active' : ''} onClick={() => setMode('group')}>Group chat</button>
       </div>
+      <input className="conv-search" placeholder="Search people by name or email…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
       {mode === 'direct' ? (
         <div className="member-list">
-          {people.length === 0 && <p className="muted small">Teammates from your spaces will appear here.</p>}
+          {people.length === 0 && <p className="muted small">{term ? 'Nobody matches that search.' : 'People from your organization appear here once they have signed in.'}</p>}
           {people.map((p) => (
             <button key={p.id} className="member-row as-btn" onClick={() => onDirect(p.id)}>
-              <div className="conv-avatar"><Avatar user={p} size={32} />{p.online && <span className="online-dot" />}</div>
+              <div className="conv-avatar"><Avatar user={p} size={32} online={p.online} /></div>
               <div className="grow"><strong>{p.name}</strong><div className="muted small">{p.email}</div></div>
-              <span className="muted small">{p.online ? 'Online' : ''}</span>
+              <span className={`small nowrap ${p.online ? 'online-text' : 'muted'}`}>{fmtLastSeen(p)}</span>
             </button>
           ))}
         </div>
@@ -350,7 +433,7 @@ function PeoplePicker({ people, min, action, withName, inline, title, onPick, on
         {people.map((p) => (
           <label key={p.id} className={`person-chip ${sel.has(p.id) ? 'on' : ''}`}>
             <input type="checkbox" checked={sel.has(p.id)} onChange={() => setSel((s) => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} />
-            <Avatar user={p} size={22} /> {p.name}
+            <Avatar user={p} size={22} online={p.online} /> {p.name}
           </label>
         ))}
       </div>

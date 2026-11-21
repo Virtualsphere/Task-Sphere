@@ -103,10 +103,12 @@ function addTicket(listId, title, statusIdx, priority, assignees, start, due, de
   addTicket(sl.id, 'UDM9R reader demo for distributor', 2, 'high', [4], day(-1), day(2), '', { by: 2 });
   addTicket(sl.id, 'Google Ads campaign review', 0, 'normal', [1], null, day(8), '', { by: 2 });
 
+  const gateMsg = { id: nid(), space_id: p.id, user_id: 1, body: 'Noted. Gate API will be ready by Thursday.', created_at: ago(190) };
   S.messages.push(
     { id: nid(), space_id: p.id, user_id: 2, kind: 'text', body: 'Morning team, client demo moved to Friday.', created_at: ago(200) },
-    { id: nid(), space_id: p.id, user_id: 1, body: 'Noted. Gate API will be ready by Thursday.', created_at: ago(190) },
+    gateMsg,
     { id: nid(), space_id: p.id, user_id: 3, body: 'I will finish the stock count sync today 👍', created_at: ago(150) },
+    { id: nid(), space_id: p.id, user_id: 2, body: '@[Vikalp Paliwal](1) great, can you share the endpoint list with @[Riya Jain](3)?', reply_to_id: gateMsg.id, created_at: ago(120) },
     { id: nid(), space_id: t.id, user_id: 3, body: 'Recon PR is up.', created_at: ago(70) },
   );
 })();
@@ -355,7 +357,7 @@ route('POST', '/tickets/:id/subtasks', ([id], b) => {
   const t = ticketOf(id);
   assertRole(spaceOfTicket(t), 'member');
   if (!b.title?.trim()) throw new HttpError(400, 'Subtask title is required');
-  S.subtasks.push({ id: nid(), ticket_id: id, title: b.title.trim(), is_done: 0, priority: b.priority || 'normal', assignee_id: Number(b.assignee_id) || null, due_date: b.due_date || null, position: nid(), created_at: now() });
+  S.subtasks.push({ id: nid(), ticket_id: id, title: b.title.trim(), description: b.description || null, is_done: 0, priority: b.priority || 'normal', assignee_id: Number(b.assignee_id) || null, due_date: b.due_date || null, position: nid(), created_at: now() });
   touch(t); changed(spaceOfTicket(t), { type: 'tickets' });
   return ticketFull(id);
 });
@@ -367,6 +369,7 @@ route('PATCH', '/subtasks/:id', ([id], b) => {
   if (b.assignee_id !== undefined) s.assignee_id = Number(b.assignee_id) || null;
   if (b.due_date !== undefined) s.due_date = b.due_date || null;
   if (b.title !== undefined) s.title = b.title;
+  if (b.description !== undefined) s.description = b.description || null;
   if (b.priority !== undefined) s.priority = b.priority;
   touch(t); changed(spaceOfTicket(t), { type: 'tickets' });
   return ticketFull(t.id);
@@ -399,6 +402,8 @@ route('DELETE', '/comments/:id', ([id]) => {
 
 // =================== v2: personal chats, calendar, meetings (demo) ===================
 const ONLINE = new Set([1, 2, 3]); // Karan shows as offline
+const LAST_SEEN = { 4: ago(95) }; // …and was last seen about an hour and a half ago
+const presenceOf = (id) => ({ online: ONLINE.has(id), last_seen_at: ONLINE.has(id) ? null : LAST_SEEN[id] || null });
 S.convs = []; S.convMembers = []; S.dms = []; S.meetings = []; S.calConnected = new Set();
 const mates = (uid) => [...new Set(S.members.filter((m) => S.members.some((x) => x.space_id === m.space_id && x.user_id === uid)).map((m) => m.user_id))].filter((x) => x !== uid);
 const convOf = (id) => {
@@ -410,7 +415,7 @@ const dmOut = (d) => ({ id: d.id, conversationId: d.conversation_id, kind: d.kin
 function addConv(type, memberIds, name = null, msgs = []) {
   const c = { id: nid(), type, name, created_by: memberIds[0], created_at: ago(3000), last_message_at: null };
   S.convs.push(c);
-  memberIds.forEach((u) => S.convMembers.push({ conversation_id: c.id, user_id: u, last_read_id: 0 }));
+  memberIds.forEach((u) => S.convMembers.push({ conversation_id: c.id, user_id: u, last_read_id: 0, last_delivered_id: 0 }));
   msgs.forEach(([u, body, mins]) => { const d = { id: nid(), conversation_id: c.id, user_id: u, kind: 'text', body, created_at: ago(mins) }; S.dms.push(d); c.last_message_at = d.created_at; });
   return c;
 }
@@ -428,7 +433,9 @@ function convList(onlyId) {
     return {
       ...c, last_read_id: cm.last_read_id,
       unread: msgs.filter((d) => d.id > cm.last_read_id && d.user_id !== me.id).length,
-      members: S.convMembers.filter((x) => x.conversation_id === c.id).map((x) => ({ ...pub(userById(x.user_id)), online: ONLINE.has(x.user_id) })),
+      members: S.convMembers.filter((x) => x.conversation_id === c.id).map((x) => ({
+        ...pub(userById(x.user_id)), ...presenceOf(x.user_id), last_read_id: x.last_read_id, last_delivered_id: Math.max(x.last_delivered_id || 0, x.last_read_id),
+      })),
       last_message: last ? { kind: last.kind, body: last.body, created_at: last.created_at, user_id: last.user_id, name: userById(last.user_id)?.name } : null,
     };
   }).sort((a, b) => new Date(b.last_message_at || b.created_at) - new Date(a.last_message_at || a.created_at));
@@ -437,17 +444,30 @@ function postDM(convId, userId, body, kind = 'text') {
   const d = { id: nid(), conversation_id: convId, user_id: userId, kind, body, created_at: now() };
   S.dms.push(d);
   S.convs.find((c) => c.id === convId).last_message_at = d.created_at;
-  if (userId === me?.id) { const cm = S.convMembers.find((m) => m.conversation_id === convId && m.user_id === userId); if (cm) cm.last_read_id = d.id; }
+  { const cm = S.convMembers.find((m) => m.conversation_id === convId && m.user_id === userId); if (cm) { cm.last_read_id = d.id; cm.last_delivered_id = d.id; } }
   if (S.convMembers.some((m) => m.conversation_id === convId && m.user_id === me?.id)) setTimeout(() => emitLocal('dm:message', dmOut(d)), 40);
   return dmOut(d);
 }
-function postSpace(spaceId, userId, body, kind = 'text') {
-  const m = { id: nid(), space_id: spaceId, user_id: userId, kind, body, created_at: now() };
+function postSpace(spaceId, userId, body, kind = 'text', replyTo = null) {
+  if (kind === 'text') {
+    // Same rule as the server: only mentions of space members are kept, with their real name
+    body = body.replace(MENTION_RE, (all, label, id) => {
+      const ok = S.members.some((x) => x.space_id === spaceId && x.user_id === Number(id));
+      return ok ? `@[${userById(Number(id)).name}](${id})` : `@${label}`;
+    });
+  }
+  const reply = replyTo && S.messages.some((x) => x.id === Number(replyTo) && x.space_id === spaceId) ? Number(replyTo) : null;
+  const m = { id: nid(), space_id: spaceId, user_id: userId, kind, body, reply_to_id: reply, created_at: now() };
   S.messages.push(m);
   setTimeout(() => emitLocal('chat:message', msgOut(m)), 40);
 }
 
-route('GET', '/people', () => mates(me.id).map((id) => ({ ...pub(userById(id)), online: ONLINE.has(id) })).sort((a, b) => a.name.localeCompare(b.name)));
+route('GET', '/people', () => {
+  const team = new Set(mates(me.id));
+  return DEMO_USERS.filter((u) => u.id !== me.id)
+    .map((u) => ({ ...pub(u), ...presenceOf(u.id), teammate: team.has(u.id) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+});
 route('GET', '/conversations', () => convList());
 route('POST', '/conversations/direct', (_, b) => {
   const other = Number(b.user_id);
@@ -466,7 +486,7 @@ route('GET', '/conversations/:id', ([id]) => { convOf(id); return convList(id)[0
 route('PATCH', '/conversations/:id', ([id], b) => { convOf(id).name = (b.name || '').trim() || null; emitLocal('conversation:updated', { id }); return { ok: true }; });
 route('POST', '/conversations/:id/members', ([id], b) => {
   convOf(id);
-  (b.user_ids || []).forEach((u) => { if (!S.convMembers.some((m) => m.conversation_id === id && m.user_id === u)) S.convMembers.push({ conversation_id: id, user_id: u, last_read_id: 0 }); });
+  (b.user_ids || []).forEach((u) => { if (!S.convMembers.some((m) => m.conversation_id === id && m.user_id === u)) S.convMembers.push({ conversation_id: id, user_id: u, last_read_id: 0, last_delivered_id: 0 }); });
   return convList(id)[0];
 });
 route('DELETE', '/conversations/:id/members/me', ([id]) => { convOf(id); S.convMembers = S.convMembers.filter((m) => !(m.conversation_id === id && m.user_id === me.id)); return { ok: true }; });
@@ -475,6 +495,7 @@ route('POST', '/conversations/:id/messages', ([id], b) => { convOf(id); return p
 route('POST', '/conversations/:id/read', ([id], b) => {
   const cm = S.convMembers.find((m) => m.conversation_id === id && m.user_id === me.id);
   if (cm) cm.last_read_id = Math.max(cm.last_read_id, Number(b.last_id) || 0);
+  if (cm) { cm.last_delivered_id = Math.max(cm.last_delivered_id || 0, cm.last_read_id); demoReceipt(cm); }
   return { ok: true };
 });
 
@@ -593,7 +614,19 @@ export async function api(path, { method = 'GET', body } = {}) {
 // ---------- socket mock — same surface as src/socket.js ----------
 const listeners = {};
 function emitLocal(event, payload) { (listeners[event] || []).forEach((f) => f(payload)); }
-const msgOut = (m) => ({ id: m.id, spaceId: m.space_id, kind: m.kind || 'text', body: m.body, created_at: m.created_at, user_id: m.user_id, name: userById(m.user_id)?.name, avatar_url: null });
+const MENTION_RE = /@\[([^\]\n]{1,100})\]\((\d+)\)/g;
+function replyOut(id) {
+  if (!id) return null;
+  const r = S.messages.find((x) => x.id === id);
+  if (!r) return { id, deleted: true };
+  const kind = r.kind || 'text';
+  const preview = kind === 'meeting' ? '📅 Meeting' : kind === 'huddle' ? '🎧 Huddle' : kind === 'file' ? '📎 File' : r.body.replace(MENTION_RE, '@$1');
+  return { id, user_id: r.user_id, name: userById(r.user_id)?.name, kind, preview: preview.slice(0, 200) };
+}
+function demoReceipt(cm) {
+  emitLocal('dm:receipt', { conversationId: cm.conversation_id, userId: cm.user_id, lastReadId: cm.last_read_id, lastDeliveredId: Math.max(cm.last_delivered_id || 0, cm.last_read_id) });
+}
+const msgOut = (m) => ({ id: m.id, spaceId: m.space_id, kind: m.kind || 'text', body: m.body, created_at: m.created_at, user_id: m.user_id, name: userById(m.user_id)?.name, avatar_url: null, reply_to: replyOut(m.reply_to_id) });
 
 const REPLIES = ['On it 👍', 'Sure, will update the ticket.', 'Noted!', 'Can we discuss this in the stand-up?', 'Done, please check.', 'Thanks for the update 🙌'];
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -664,7 +697,7 @@ const socket = {
     if (e === 'chat:send') {
       const spaceId = Number(data.spaceId);
       if (!roleOf(spaceId, me?.id)) { ack?.({ error: 'Not a member of this space' }); return; }
-      postSpace(spaceId, me.id, String(data.body).slice(0, 4000));
+      postSpace(spaceId, me.id, String(data.body).slice(0, 4000), 'text', data.replyTo);
       ack?.({ ok: true });
       const others = S.members.filter((x) => x.space_id === spaceId && x.user_id !== me.id);
       if (!others.length) return;
@@ -677,10 +710,14 @@ const socket = {
     if (e === 'dm:send') {
       const id = Number(data.conversationId);
       try { convOf(id); } catch { ack?.({ error: 'Conversation not found' }); return; }
-      postDM(id, me.id, String(data.body).slice(0, 4000));
+      const sent = postDM(id, me.id, String(data.body).slice(0, 4000));
       ack?.({ ok: true });
       const others = S.convMembers.filter((m) => m.conversation_id === id && m.user_id !== me.id);
       if (!others.length) return;
+      // ✓✓ delivered to whoever is online, then blue ✓✓ once they "read" it
+      setTimeout(() => others.filter((m) => ONLINE.has(m.user_id)).forEach((m) => { m.last_delivered_id = sent.id; demoReceipt(m); }), 400);
+      setTimeout(() => others.filter((m) => ONLINE.has(m.user_id)).forEach((m) => { m.last_read_id = sent.id; demoReceipt(m); }), 1600);
+      if (!others.some((m) => ONLINE.has(m.user_id))) return; // nobody online to reply
       const who = userById(pick(others).user_id);
       setTimeout(() => emitLocal('dm:typing', { conversationId: id, userId: who.id, name: who.name }), 800);
       setTimeout(() => postDM(id, who.id, pick(REPLIES)), 2400);

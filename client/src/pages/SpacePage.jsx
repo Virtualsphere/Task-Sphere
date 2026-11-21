@@ -7,12 +7,15 @@ import { can, store } from '../util';
 import TopBar from '../components/TopBar';
 import ListView from '../components/ListView';
 import ChatPanel from '../components/ChatPanel';
+import { mentionsUser } from '../components/ChatText';
 import CreateListModal from '../components/CreateListModal';
 import MembersModal from '../components/MembersModal';
 import Avatar from '../components/Avatar';
 import ScheduleMeetingModal from '../components/ScheduleMeetingModal';
 import { MeetingList } from './CalendarPage';
 import { useHuddle } from '../huddle/HuddleContext';
+
+const parseJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
 export default function SpacePage() {
   const { spaceId, listId } = useParams();
@@ -25,6 +28,7 @@ export default function SpacePage() {
   const [showCreateList, setShowCreateList] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [mentioned, setMentioned] = useState(false); // someone @mentioned me while chat was closed
   const [showSchedule, setShowSchedule] = useState(false);
   const [meetings, setMeetings] = useState([]);
   const huddle = useHuddle();
@@ -67,9 +71,13 @@ export default function SpacePage() {
 
   // Unread badge when chat is closed
   useEffect(() => {
-    if (chatOpen) { setUnread(0); return; }
+    if (chatOpen) { setUnread(0); setMentioned(false); return; }
     const socket = getSocket();
-    const onMsg = (m) => { if (m.spaceId === Number(spaceId) && m.user_id !== user.id) setUnread((n) => n + 1); };
+    const onMsg = (m) => {
+      if (m.spaceId !== Number(spaceId) || m.user_id === user.id) return;
+      setUnread((n) => n + 1);
+      if (mentionsUser(m.body, user.id) || mentionsUser(parseJson(m.body)?.caption, user.id)) setMentioned(true);
+    };
     socket.on('chat:message', onMsg);
     return () => socket.off('chat:message', onMsg);
   }, [chatOpen, spaceId, user.id]);
@@ -117,7 +125,7 @@ export default function SpacePage() {
           </button>
           <button className="nav-item" onClick={() => toggleChat(!chatOpen)}>
             💬 <span className="grow">Space chat</span>
-            {unread > 0 && <span className="badge">{unread}</span>}
+            {unread > 0 && <span className="badge" title={mentioned ? 'You were mentioned' : undefined}>{mentioned ? '@ ' : ''}{unread}</span>}
           </button>
           {huddle?.states[`space:${space.id}`] && huddle.active?.key !== `space:${space.id}` && (
             <button className="nav-item huddle-live-item" onClick={() => huddle.join('space', space.id, space.name)}>
@@ -145,7 +153,7 @@ export default function SpacePage() {
           )}
         </main>
 
-        {chatOpen && <ChatPanel spaceId={space.id} spaceName={space.name} canSchedule={can(space.my_role, 'member')} onSchedule={() => setShowSchedule(true)} onClose={() => toggleChat(false)} />}
+        {chatOpen && <ChatPanel spaceId={space.id} spaceName={space.name} members={space.members} canSchedule={can(space.my_role, 'member')} onSchedule={() => setShowSchedule(true)} onClose={() => toggleChat(false)} />}
       </div>
 
       {showCreateList && (

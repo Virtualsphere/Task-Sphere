@@ -3,6 +3,7 @@ const { verifyToken, getRole } = require('./access');
 const svc = require('./chatService');
 const presence = require('./presence');
 const huddles = require('./huddles');
+const db = require('./db');
 
 module.exports = function setupSocket(io) {
   svc.setIo(io);
@@ -19,16 +20,23 @@ module.exports = function setupSocket(io) {
   io.on('connection', async (socket) => {
     const uid = socket.user.id;
     socket.join(svc.userRoom(uid)); // personal room: DMs, rings, presence, meeting invites
-    if (presence.connect(uid)) {
-      const mates = await svc.teammateIds(uid).catch(() => []);
-      io.to(mates.map(svc.userRoom)).emit('presence', { userId: uid, online: true });
-    }
+    // Register the disconnect handler first, so a quick disconnect during the awaits below isn't missed
     socket.on('disconnect', async () => {
       if (presence.disconnect(uid)) {
-        const mates = await svc.teammateIds(uid).catch(() => []);
-        io.to(mates.map(svc.userRoom)).emit('presence', { userId: uid, online: false });
+        // Went offline: remember when, and tell everyone who can chat with them
+        await db.query('UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?', [uid]).catch(() => {});
+        const [[row]] = await db.query('SELECT last_seen_at FROM users WHERE id = ?', [uid]).catch(() => [[]]);
+        const contacts = await svc.contactIds(uid).catch(() => []);
+        io.to(contacts.map(svc.userRoom)).emit('presence', { userId: uid, online: false, last_seen_at: row?.last_seen_at || null });
       }
     });
+    if (presence.connect(uid)) {
+      await db.query('UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?', [uid]).catch(() => {});
+      const contacts = await svc.contactIds(uid).catch(() => []);
+      io.to(contacts.map(svc.userRoom)).emit('presence', { userId: uid, online: true });
+    }
+    // Messages that arrived while they were away are now delivered (✓✓)
+    svc.markAllDelivered(uid).catch(() => {});
 
     // ---- Space chat ----
     socket.on('space:join', async ({ spaceId } = {}, ack) => {
@@ -39,11 +47,11 @@ module.exports = function setupSocket(io) {
       ack?.({ ok: true, role });
     });
 
-    socket.on('chat:send', async ({ spaceId, body } = {}, ack) => {
+    socket.on('chat:send', async ({ spaceId, body, replyTo } = {}, ack) => {
       try {
         // Re-check membership on every message so removed members can't keep posting
         if (!(await getRole(Number(spaceId), uid))) return ack?.({ error: 'Not a member of this space' });
-        await svc.postSpaceMessage(Number(spaceId), uid, body);
+        await svc.postSpaceMessage(Number(spaceId), uid, body, 'text', { replyToId: replyTo });
         ack?.({ ok: true });
       } catch (e) {
         ack?.({ error: e.status ? e.message : 'Could not send message' });
