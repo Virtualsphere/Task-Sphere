@@ -4,6 +4,7 @@ import { useAuth } from '../AuthContext';
 import { api } from '../api';
 import { getSocket } from '../socket';
 import Avatar from './Avatar';
+import { NotificationBell } from '../notify/NotificationSettings';
 
 // Total unread personal messages, kept live
 function useUnread() {
@@ -36,6 +37,7 @@ export default function TopBar({ children }) {
       </nav>
       <div className="topbar-mid">{children}</div>
       <div className="topbar-user">
+        <NotificationBell />
         <Avatar user={user} size={28} />
         <span className="hide-md clamp1 topbar-name">{user?.name}</span>
         <button className="btn ghost small" onClick={logout} title="Sign out" aria-label="Sign out">

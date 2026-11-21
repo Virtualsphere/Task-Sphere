@@ -12,7 +12,7 @@ import { useHuddle } from '../huddle/HuddleContext';
 import Avatar from '../components/Avatar';
 import { plainMentions } from '../components/ChatText';
 import { filePreviewText } from '../components/FileMessage';
-import { startRingtone, stopRingtone, retryRingtone, previewRingtone, playPing, unlockAudio } from './sounds';
+import { startRingtone, stopRingtone, retryRingtone, previewRingtone, playPing, unlockAudio, audioUnlocked } from './sounds';
 import { showDesktop, closeDesktop, desktopPermission, askDesktopPermission, setNotificationNavigator } from './desktop';
 
 const AlertCtx = createContext(null);
@@ -123,21 +123,52 @@ export function NotificationProvider({ children }) {
   }, [ringKeys]);
   useEffect(() => () => stopRingtone(), []);
 
+  // Notification settings (🔔 in the top bar): always reachable, even after "Not now" or "Block"
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [soundReady, setSoundReady] = useState(audioUnlocked());
+  const refreshPermission = useCallback(() => setPermission(desktopPermission()), []);
+
+  // Follow changes made in the browser's own site settings (e.g. unblocking notifications)
+  useEffect(() => {
+    let status;
+    navigator.permissions?.query({ name: 'notifications' }).then((s) => { status = s; s.onchange = refreshPermission; }).catch(() => {});
+    window.addEventListener('focus', refreshPermission);
+    // Sound becomes allowed after the first click/key press on the page
+    const markSound = () => setTimeout(() => setSoundReady(audioUnlocked()), 300);
+    window.addEventListener('pointerdown', markSound);
+    window.addEventListener('keydown', markSound);
+    return () => {
+      if (status) status.onchange = null;
+      window.removeEventListener('focus', refreshPermission);
+      window.removeEventListener('pointerdown', markSound);
+      window.removeEventListener('keydown', markSound);
+    };
+  }, [refreshPermission]);
+
   const enable = async () => {
     unlockAudio();
     previewRingtone(3); // let them hear what a huddle call sounds like
-    setPermission(await askDesktopPermission());
+    const result = await askDesktopPermission();
+    setPermission(result);
+    setSoundReady(audioUnlocked());
+    // Clicked "Block" (or blocked earlier): open the settings, which explain how to unblock
+    if (result === 'denied') setSettingsOpen(true);
   };
+  const testSound = () => { previewRingtone(4); setTimeout(() => setSoundReady(audioUnlocked()), 300); };
   const hidePrompt = () => {
     setPromptHidden(true);
     try { localStorage.setItem(PROMPT_KEY, '1'); } catch { /* ignore */ }
+    huddle?.setNotice('You can turn notifications on any time from 🔔 in the top bar');
   };
-  const showPrompt = user && permission === 'default' && !promptHidden;
+  const showPrompt = user && permission === 'default' && !promptHidden && !settingsOpen;
 
   const open = (card) => { dismiss(card.tag); if (card.path) navigate(card.path); };
 
   return (
-    <AlertCtx.Provider value={{ cards, dismiss, open, showPrompt, enable, hidePrompt, linkHuddle, clearLinkHuddle: () => setLinkHuddle(null) }}>
+    <AlertCtx.Provider value={{
+      cards, dismiss, open, showPrompt, enable, hidePrompt, linkHuddle, clearLinkHuddle: () => setLinkHuddle(null),
+      permission, refreshPermission, soundReady, testSound, settingsOpen, setSettingsOpen,
+    }}>
       {children}
     </AlertCtx.Provider>
   );
@@ -169,14 +200,19 @@ export function AlertCards() {
       )}
       {a.showPrompt && (
         <div className="toast notify-prompt" role="dialog" aria-label="Turn on notifications">
-          <span className="notify-prompt-icon" aria-hidden="true">🔔</span>
-          <div className="grow small">
-            <strong>Turn on desktop notifications</strong>
-            <div className="muted">Hear huddle calls and get alerts for mentions and messages, even in another window. Keep TaskSphere open in a tab.</div>
+          <div className="notify-prompt-head">
+            <span className="notify-prompt-icon" aria-hidden="true">🔔</span>
+            <div className="notify-prompt-text">
+              <strong>Turn on desktop notifications</strong>
+              <p className="small muted">Hear huddle calls and get alerts for mentions and messages, even when you're in another window.</p>
+            </div>
           </div>
-          <button className="btn primary small" onClick={a.enable}>Turn on</button>
-          <button className="btn small" onClick={() => previewRingtone(4)} title="Play the huddle call sound">🔊 Test sound</button>
-          <button className="btn small" onClick={a.hidePrompt}>Not now</button>
+          <div className="notify-prompt-actions">
+            <button className="btn small" onClick={a.testSound} title="Play the huddle call sound">🔊 Test sound</button>
+            <span className="grow" />
+            <button className="btn ghost small" onClick={a.hidePrompt}>Not now</button>
+            <button className="btn primary small" onClick={a.enable}>Turn on</button>
+          </div>
         </div>
       )}
       {a.cards.map((c) => (
