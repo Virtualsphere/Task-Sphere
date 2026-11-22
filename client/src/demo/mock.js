@@ -411,7 +411,16 @@ const convOf = (id) => {
   if (!c || !S.convMembers.some((m) => m.conversation_id === id && m.user_id === me.id)) throw new HttpError(404, 'Conversation not found');
   return c;
 };
-const dmOut = (d) => ({ id: d.id, conversationId: d.conversation_id, kind: d.kind, body: d.body, created_at: d.created_at, user_id: d.user_id, name: userById(d.user_id)?.name, avatar_url: null });
+function dmReplyOut(id) {
+  if (!id) return null;
+  const r = S.dms.find((x) => x.id === id);
+  if (!r) return { id, deleted: true };
+  let preview = r.body;
+  if (r.kind === 'file') { try { preview = `📎 ${JSON.parse(r.body).name}`; } catch { preview = '📎 File'; } }
+  if (r.kind === 'meeting') preview = '📅 Meeting';
+  return { id, user_id: r.user_id, name: userById(r.user_id)?.name, kind: r.kind, preview: String(preview).replace(/@\[([^\]\n]{1,100})\]\((\d+)\)/g, '@$1').slice(0, 200) };
+}
+const dmOut = (d) => ({ id: d.id, conversationId: d.conversation_id, kind: d.kind, body: d.body, created_at: d.created_at, user_id: d.user_id, name: userById(d.user_id)?.name, avatar_url: null, reply_to: dmReplyOut(d.reply_to_id) });
 function addConv(type, memberIds, name = null, msgs = []) {
   const c = { id: nid(), type, name, created_by: memberIds[0], created_at: ago(3000), last_message_at: null };
   S.convs.push(c);
@@ -440,8 +449,9 @@ function convList(onlyId) {
     };
   }).sort((a, b) => new Date(b.last_message_at || b.created_at) - new Date(a.last_message_at || a.created_at));
 }
-function postDM(convId, userId, body, kind = 'text') {
-  const d = { id: nid(), conversation_id: convId, user_id: userId, kind, body, created_at: now() };
+function postDM(convId, userId, body, kind = 'text', replyTo = null) {
+  const reply = replyTo && S.dms.some((x) => x.id === Number(replyTo) && x.conversation_id === convId) ? Number(replyTo) : null;
+  const d = { id: nid(), conversation_id: convId, user_id: userId, kind, body, reply_to_id: reply, created_at: now() };
   S.dms.push(d);
   S.convs.find((c) => c.id === convId).last_message_at = d.created_at;
   { const cm = S.convMembers.find((m) => m.conversation_id === convId && m.user_id === userId); if (cm) { cm.last_read_id = d.id; cm.last_delivered_id = d.id; } }
@@ -721,7 +731,7 @@ const socket = {
     if (e === 'dm:send') {
       const id = Number(data.conversationId);
       try { convOf(id); } catch { ack?.({ error: 'Conversation not found' }); return; }
-      const sent = postDM(id, me.id, String(data.body).slice(0, 4000));
+      const sent = postDM(id, me.id, String(data.body).slice(0, 4000), 'text', data.replyTo);
       ack?.({ ok: true });
       const others = S.convMembers.filter((m) => m.conversation_id === id && m.user_id !== me.id);
       if (!others.length) return;

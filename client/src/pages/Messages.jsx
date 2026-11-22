@@ -15,6 +15,7 @@ import FileMessage, { filePreviewText } from '../components/FileMessage';
 import { MentionText, MentionTextarea, encodeMentions, plainMentions } from '../components/ChatText';
 import { useChatFiles, AttachButton, PendingFiles, DropHint } from '../components/ChatFiles';
 import { HuddleButton } from '../huddle/HuddleWindow';
+import { ReplyQuote, previewOf } from '../components/ChatPanel';
 import { useHuddle } from '../huddle/HuddleContext';
 
 export function convTitle(c, meId) {
@@ -205,6 +206,9 @@ function Thread({ conv, people, onChanged }) {
   const [text, setText] = useState('');
   const [typing, setTyping] = useState('');
   const [error, setError] = useState('');
+  const [replyTo, setReplyTo] = useState(null); // message being replied to
+  const bodyRef = useRef(null);
+  const inputRef = useRef(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [meetings, setMeetings] = useState([]);
@@ -261,9 +265,31 @@ function Thread({ conv, people, onChanged }) {
   }, [conv.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadOlder = async () => {
-    const older = await api(`/conversations/${conv.id}/messages?before=${messages[0].id}`);
+    const cur = messagesRef.current;
+    if (!cur.length) return [];
+    const older = await api(`/conversations/${conv.id}/messages?before=${cur[0].id}`);
     setHasMore(older.length === 50);
     setMessages((m) => [...older, ...m]);
+    return older;
+  };
+
+  // Reply: quote a message, like WhatsApp
+  const startReply = (m) => { setReplyTo(m); inputRef.current?.focus(); };
+  // Scroll to the quoted message and flash it; loads older history if needed
+  const jumpTo = async (id) => {
+    const find = () => bodyRef.current?.querySelector(`[data-msg-id="${id}"]`);
+    let el = find();
+    for (let i = 0; !el && i < 10; i++) {
+      const older = await loadOlder().catch(() => []);
+      if (!older.length) break;
+      await new Promise((r) => setTimeout(r, 0));
+      el = find();
+    }
+    if (!el) { setError('That message is too far back to show.'); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
   };
 
   const send = async (e) => {
@@ -271,14 +297,16 @@ function Thread({ conv, people, onChanged }) {
     if (chat.upload) return;
     // "@Name" picked from the list becomes @[Name](id): the person gets an email and a notification
     const body = encodeMentions(text.trim(), picked.current);
+    const reply = replyTo?.id || null;
     if (chat.files.length) {
       // Files go one by one; the typed text is sent as the caption of the first file
-      if (await chat.sendFiles(body)) { setText(''); picked.current.clear(); }
+      if (await chat.sendFiles(body, { replyTo: reply })) { setText(''); setReplyTo(null); picked.current.clear(); }
       return;
     }
     if (!body) return;
-    getSocket().emit('dm:send', { conversationId: conv.id, body }, (r) => r?.error && setError(r.error));
+    getSocket().emit('dm:send', { conversationId: conv.id, body, replyTo: reply }, (r) => r?.error && setError(r.error));
     setText('');
+    setReplyTo(null);
     picked.current.clear();
   };
   const onType = (v) => {
@@ -338,23 +366,26 @@ function Thread({ conv, people, onChanged }) {
         </div>
       )}
 
-      <div className="thread-body">
+      <div className="thread-body" ref={bodyRef}>
         {hasMore && <button className="btn small ghost load-older" onClick={loadOlder}>Load older</button>}
         {messages.length === 0 && <p className="muted small center-text">Say hi to {title.split(' ')[0]} 👋</p>}
         {messages.map((m, i) => {
           if (m.kind === 'huddle') return <HuddleEvent key={m.id} body={m.body} name={m.name} scope="conv" scopeId={conv.id} title={title} />;
           const mine = m.user_id === user.id;
-          const grouped = i > 0 && messages[i - 1].user_id === m.user_id && messages[i - 1].kind === 'text';
+          const grouped = !m.reply_to && i > 0 && messages[i - 1].user_id === m.user_id && messages[i - 1].kind === 'text';
           return (
-            <div key={m.id} className={`msg ${mine ? 'mine' : ''} ${grouped ? 'grouped' : ''}`}>
+            <div key={m.id} data-msg-id={m.id} className={`msg ${mine ? 'mine' : ''} ${grouped ? 'grouped' : ''}`}
+              onDoubleClick={() => startReply(m)}>
               {!mine && !grouped && <Avatar user={{ name: m.name, avatar_url: m.avatar_url }} size={26} />}
               <div className={`msg-bubble ${m.kind === 'meeting' ? 'plain' : ''}`}>
                 {!grouped && <div className="msg-meta">{mine ? 'You' : m.name} · {fmtTime(m.created_at)}</div>}
+                {m.reply_to && <ReplyQuote reply={m.reply_to} meId={user.id} onJump={jumpTo} />}
                 {m.kind === 'meeting' ? <MeetingCard body={m.body} />
                   : m.kind === 'file' ? <FileMessage body={m.body} meId={user.id} />
                   : <MentionText text={m.body} meId={user.id} />}
                 {mine && <div className="msg-status"><Ticks msgId={m.id} conv={conv} meId={user.id} /></div>}
               </div>
+              <button type="button" className="msg-reply-btn" onClick={() => startReply(m)} title="Reply" aria-label="Reply">↩</button>
             </div>
           );
         })}
@@ -362,11 +393,23 @@ function Thread({ conv, people, onChanged }) {
       </div>
       {(error || chat.error) && <p className="error small pad">{error || chat.error}</p>}
       <PendingFiles chat={chat} />
+      {replyTo && (
+        <div className="reply-bar">
+          <div className="grow reply-bar-text">
+            <span className="reply-quote-name">Replying to {replyTo.user_id === user.id ? 'yourself' : replyTo.name}</span>
+            <span className="reply-quote-text">{previewOf(replyTo)}</span>
+          </div>
+          <button type="button" className="icon-btn" onClick={() => setReplyTo(null)} aria-label="Cancel reply">✕</button>
+        </div>
+      )}
       <form className="chat-input" onSubmit={send}>
         <AttachButton chat={chat} />
-        <MentionTextarea value={text} onChange={onType} onPaste={chat.onPaste} rows={1} pickerAbove
+        <MentionTextarea ref={inputRef} value={text} onChange={onType} onPaste={chat.onPaste} rows={1} pickerAbove
           members={conv.members} meId={user.id} picked={picked}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e);
+            else if (e.key === 'Escape' && replyTo) { e.preventDefault(); setReplyTo(null); }
+          }}
           placeholder={chat.files.length ? 'Add a message (optional)' : `Message ${title}${conv.type === 'group' ? ' (@ to mention)' : ''}`}
           maxLength={4000} autoFocus />
         <button className="btn primary" disabled={!!chat.upload || (!text.trim() && !chat.files.length)}>{chat.upload ? 'Sending…' : 'Send'}</button>

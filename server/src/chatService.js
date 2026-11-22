@@ -106,24 +106,41 @@ async function assertConvMember(convId, userId) {
   return conv;
 }
 
+// Columns + joins shared by personal-chat history and newly posted messages (incl. the message replied to)
+const DM_SELECT = `SELECT d.id, d.conversation_id, d.kind, d.body, d.created_at, d.reply_to_id, d.user_id, u.name, u.avatar_url,
+       r.kind AS r_kind, r.body AS r_body, r.user_id AS r_user_id, ru.name AS r_name
+  FROM direct_messages d JOIN users u ON u.id = d.user_id
+  LEFT JOIN direct_messages r ON r.id = d.reply_to_id AND r.conversation_id = d.conversation_id
+  LEFT JOIN users ru ON ru.id = r.user_id`;
+
+const replyOut = (m) => (m.reply_to_id && m.r_kind
+  ? { id: m.reply_to_id, user_id: m.r_user_id, name: m.r_name, kind: m.r_kind, preview: replyPreview(m.r_kind, m.r_body).slice(0, 200) }
+  : m.reply_to_id ? { id: m.reply_to_id, deleted: true } : null);
+
 const dmOut = (m) => ({
   id: m.id, conversationId: m.conversation_id, kind: m.kind, body: m.body, created_at: m.created_at,
-  user_id: m.user_id, name: m.name, avatar_url: m.avatar_url,
+  user_id: m.user_id, name: m.name, avatar_url: m.avatar_url, reply_to: replyOut(m),
 });
 
-// Insert a message into a 1:1/group conversation and push it live to every member
-async function postDirectMessage(convId, userId, body, kind = 'text') {
+// Insert a message into a 1:1/group conversation and push it live to every member.
+// opts.replyToId: the message being replied to (must be in the same conversation).
+async function postDirectMessage(convId, userId, body, kind = 'text', opts = {}) {
   let text = String(body || '').trim();
   if (!text) throw new HttpError(400, 'Message cannot be empty');
   if (kind === 'text') text = await cleanConvMentions(convId, text.slice(0, 8000));
-  const [r] = await db.query('INSERT INTO direct_messages (conversation_id, user_id, kind, body) VALUES (?, ?, ?, ?)',
-    [convId, userId, kind, text.slice(0, 8000)]);
+  let replyTo = null;
+  if (opts.replyToId) {
+    const [[rr]] = await db.query('SELECT id FROM direct_messages WHERE id = ? AND conversation_id = ?', [Number(opts.replyToId), convId]);
+    if (!rr) throw new HttpError(400, 'The message you replied to no longer exists');
+    replyTo = rr.id;
+  }
+  const [r] = await db.query('INSERT INTO direct_messages (conversation_id, user_id, kind, body, reply_to_id) VALUES (?, ?, ?, ?, ?)',
+    [convId, userId, kind, text.slice(0, 8000), replyTo]);
   await db.query('UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?', [convId]);
   // The sender has obviously read their own message
   await db.query('UPDATE conversation_members SET last_read_id = ?, last_delivered_id = ? WHERE conversation_id = ? AND user_id = ?',
     [r.insertId, r.insertId, convId, userId]);
-  const [[row]] = await db.query(
-    `SELECT d.*, u.name, u.avatar_url FROM direct_messages d JOIN users u ON u.id = d.user_id WHERE d.id = ?`, [r.insertId]);
+  const [[row]] = await db.query(`${DM_SELECT} WHERE d.id = ?`, [r.insertId]);
   const msg = dmOut(row);
   const memberIds = await convMemberIds(convId);
   if (io) io.to(memberIds.map(userRoom)).emit('dm:message', msg);
@@ -134,12 +151,17 @@ async function postDirectMessage(convId, userId, body, kind = 'text') {
       [r.insertId, convId, uid]);
     await emitReceipt(convId, uid);
   }
-  // @mentions: email + desktop notification for the people tagged
-  const mentionText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
-  if (mentionText.includes('@[')) {
-    convWhere(convId).then((where) => alerts.mentioned({
-      text: mentionText, fromId: userId, where, path: `/messages/${convId}`, tag: `dm-${msg.id}`,
-    })).catch(() => {});
+  // Notifications (not for huddle events, which ring instead):
+  //  - @mentioned people and the author of the message replied to: email + desktop notification right away
+  //  - everyone else in the chat: an email only if the message is still unread after a minute
+  if (kind !== 'huddle') {
+    const msgText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
+    convWhere(convId).then(async (where) => {
+      const notified = await alerts.chatMessage({
+        text: msgText, fromId: userId, where, path: `/messages/${convId}`, tag: `dm-${msg.id}`, replyTo: msg.reply_to,
+      });
+      alerts.dmUnread({ convId, fromId: userId, where, recipientIds: memberIds.filter((id) => id !== userId && !notified.includes(id)) });
+    }).catch(() => {});
   }
   return msg;
 }
@@ -218,12 +240,13 @@ async function postSpaceMessage(spaceId, userId, body, kind = 'text', opts = {})
   const [[row]] = await db.query(`${SPACE_MSG_SELECT} WHERE m.id = ?`, [r.insertId]);
   const msg = spaceMsgOut(row);
   if (io) io.to(`space:${spaceId}`).emit('chat:message', msg);
-  // @mentions: email + desktop notification for the people tagged (they may not have the space open)
-  const mentionText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
-  if (mentionText.includes('@[')) {
-    db.query('SELECT name FROM spaces WHERE id = ?', [spaceId]).then(([[s]]) => alerts.mentioned({
-      text: mentionText, fromId: userId, where: `the space “${s?.name || 'Space'}” chat`,
-      path: `/spaces/${spaceId}?chat=1`, tag: `space-msg-${msg.id}`,
+  // @mentions and replies: email + desktop notification for the people the message is aimed at
+  // (they may not have the space open). Plain messages don't notify the whole space.
+  const msgText = kind === 'text' ? text : kind === 'file' ? fileCaption(text) : '';
+  if (msgText.includes('@[') || (msg.reply_to && !msg.reply_to.deleted)) {
+    db.query('SELECT name FROM spaces WHERE id = ?', [spaceId]).then(([[s]]) => alerts.chatMessage({
+      text: msgText, fromId: userId, where: `the space “${s?.name || 'Space'}” chat`,
+      path: `/spaces/${spaceId}?chat=1`, tag: `space-msg-${msg.id}`, replyTo: msg.reply_to,
     })).catch(() => {});
   }
   return msg;
@@ -232,7 +255,7 @@ async function postSpaceMessage(spaceId, userId, body, kind = 'text', opts = {})
 module.exports = {
   setIo, getIo, userRoom, teammateIds, contactIds, assertTeammates, convMemberIds, spaceMemberIds,
   emitReceipt, markAllDelivered, markRead,
-  assertConvMember, postDirectMessage, postSpaceMessage, dmOut, spaceMsgOut, SPACE_MSG_SELECT, cleanMentions, cleanConvMentions,
+  assertConvMember, postDirectMessage, postSpaceMessage, dmOut, spaceMsgOut, SPACE_MSG_SELECT, DM_SELECT, cleanMentions, cleanConvMentions,
 };
 
 // Let the notification module push socket events (avoids a circular require)

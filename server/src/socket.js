@@ -65,10 +65,10 @@ module.exports = function setupSocket(io) {
     });
 
     // ---- Personal / group chats ----
-    socket.on('dm:send', async ({ conversationId, body } = {}, ack) => {
+    socket.on('dm:send', async ({ conversationId, body, replyTo } = {}, ack) => {
       try {
         await svc.assertConvMember(Number(conversationId), uid);
-        await svc.postDirectMessage(Number(conversationId), uid, body);
+        await svc.postDirectMessage(Number(conversationId), uid, body, 'text', { replyToId: replyTo });
         ack?.({ ok: true });
       } catch (e) {
         ack?.({ error: e.status ? e.message : 'Could not send message' });

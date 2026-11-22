@@ -13,14 +13,14 @@ import { HuddleButton } from '../huddle/HuddleWindow';
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
 // One-line preview of a message, for the "Replying to" bar
-function previewOf(m) {
+export function previewOf(m) {
   if (m.kind === 'file') { const f = parse(m.body) || {}; return `📎 ${f.caption ? plainMentions(f.caption) : f.name || 'File'}`; }
   if (m.kind === 'meeting') return `📅 ${parse(m.body)?.title || 'Meeting'}`;
   return plainMentions(m.body);
 }
 
 // The quoted message shown at the top of a reply; click to jump to the original
-function ReplyQuote({ reply, meId, onJump }) {
+export function ReplyQuote({ reply, meId, onJump }) {
   if (reply.deleted) return <div className="reply-quote deleted">Original message was deleted</div>;
   return (
     <button type="button" className="reply-quote" onClick={() => onJump(reply.id)} title="Go to message">

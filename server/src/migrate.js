@@ -65,6 +65,12 @@ const mysql = require('mysql2/promise');
     // Treat everything already read as delivered
     await conn.query('UPDATE conversation_members SET last_delivered_id = last_read_id');
   }
+  // v7 upgrade: replies in personal / group chats
+  if (!(await columnInfo('direct_messages', 'reply_to_id'))) {
+    await conn.query(`ALTER TABLE direct_messages
+      ADD COLUMN reply_to_id INT NULL AFTER body,
+      ADD CONSTRAINT fk_dm_reply FOREIGN KEY (reply_to_id) REFERENCES direct_messages(id) ON DELETE SET NULL`);
+  }
   await conn.end();
   console.log(`Database "${dbName}" is ready.`);
 })().catch((err) => {

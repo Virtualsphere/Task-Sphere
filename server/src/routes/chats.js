@@ -118,15 +118,14 @@ router.get('/conversations/:id/messages', ah(async (req, res) => {
   await svc.assertConvMember(req.params.id, req.user.id);
   const before = Number(req.query.before) || 2147483647;
   const [rows] = await db.query(
-    `SELECT d.*, u.name, u.avatar_url FROM direct_messages d JOIN users u ON u.id = d.user_id
-      WHERE d.conversation_id = ? AND d.id < ? ORDER BY d.id DESC LIMIT 50`, [req.params.id, before]);
+    `${svc.DM_SELECT} WHERE d.conversation_id = ? AND d.id < ? ORDER BY d.id DESC LIMIT 50`, [req.params.id, before]);
   res.json(rows.reverse().map(svc.dmOut));
 }));
 
 // POST /api/conversations/:id/messages { body } — (sockets are used normally; this is the REST fallback)
 router.post('/conversations/:id/messages', ah(async (req, res) => {
   await svc.assertConvMember(req.params.id, req.user.id);
-  res.status(201).json(await svc.postDirectMessage(Number(req.params.id), req.user.id, req.body.body));
+  res.status(201).json(await svc.postDirectMessage(Number(req.params.id), req.user.id, req.body.body, 'text', { replyToId: req.body.reply_to }));
 }));
 
 // POST /api/conversations/:id/read { last_id } — also tells the senders (blue ✓✓)

@@ -35,11 +35,11 @@ function uploadRoute(getTarget, checkAccess, post) {
   ];
 }
 
-// POST /api/conversations/:id/attachments  (multipart: file, optional caption) — conversation members
+// POST /api/conversations/:id/attachments  (multipart: file, optional caption, optional replyTo) — conversation members
 router.post('/conversations/:id/attachments', ...uploadRoute(
   (req) => ({ conversationId: Number(req.params.id) }),
   (t, uid) => svc.assertConvMember(t.conversationId, uid),
-  (t, uid, body) => svc.postDirectMessage(t.conversationId, uid, body, 'file'),
+  (t, uid, body, req) => svc.postDirectMessage(t.conversationId, uid, body, 'file', { replyToId: Number(req.body.replyTo) || null }),
 ));
 
 // POST /api/spaces/:spaceId/attachments (file, optional caption, optional replyTo) — any space member (viewers can chat too)

@@ -162,4 +162,47 @@ function sendMention({ to, fromName: who, fromEmail, where, snippet, path }) {
   });
 }
 
-module.exports = { mailEnabled: enabled, sendSpaceInvite, sendHuddleStarted, sendMention, appUrl };
+const quoteBlock = (s, color = '#6366f1') =>
+  `<span style="display:block;border-left:3px solid ${color};padding:6px 12px;background:#f5f7ff;border-radius:4px;white-space:pre-wrap">${esc(s)}</span>`;
+
+/** Someone replied to your message. Never throws. */
+function sendReply({ to, fromName: who, fromEmail, where, snippet, original, path }) {
+  const url = absolute(path);
+  const reply = String(snippet || '').slice(0, 400);
+  const orig = String(original || '').slice(0, 200);
+  const text = [`${who} replied to your message in ${where}:`, '', `Your message: "${orig}"`, `${who}: "${reply}"`, '', `Open: ${url}`, '', '– TaskSphere'].join('\n');
+  return send({
+    to, subject: `${who} replied to your message in ${where}`, text,
+    html: card({
+      heading: `↩ ${esc(who)} replied to you`,
+      lines: [`In ${esc(where)}:`, `<span style="color:#6b7280;font-size:13px">Your message</span>${quoteBlock(orig, '#d1d5db')}`, quoteBlock(reply)],
+      button: 'Open in TaskSphere',
+      url,
+    }),
+    replyTo: fromEmail ? { name: who, address: fromEmail } : undefined,
+  });
+}
+
+/** You have unread personal messages. `messages` = [{ name, text }] (newest last). Never throws. */
+function sendUnreadMessages({ to, fromName: who, where, messages, total, path }) {
+  const url = absolute(path);
+  const n = Math.max(total || 0, messages.length);
+  const subject = n === 1 ? `New message from ${who}` : `${n} new messages from ${who}`;
+  const text = [`${subject} in ${where}:`, '', ...messages.map((m) => `${m.name}: ${m.text}`), '', `Reply: ${url}`, '', '– TaskSphere'].join('\n');
+  return send({
+    to, subject, text,
+    html: card({
+      heading: `💬 ${esc(subject)}`,
+      lines: [
+        `In ${esc(where)}:`,
+        ...messages.map((m) => `<b>${esc(m.name)}</b>${quoteBlock(m.text)}`),
+        n > messages.length ? `<span style="color:#6b7280">…and ${n - messages.length} more</span>` : '',
+      ].filter(Boolean),
+      button: 'Reply in TaskSphere',
+      url,
+      footer: 'You get this when a message stays unread for a minute. Open the chat to stop these.',
+    }),
+  });
+}
+
+module.exports = { mailEnabled: enabled, sendSpaceInvite, sendHuddleStarted, sendMention, sendReply, sendUnreadMessages, appUrl };
