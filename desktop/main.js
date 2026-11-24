@@ -123,7 +123,8 @@ function setupPermissions() {
   ses.setPermissionRequestHandler((wc, permission, callback) => {
     callback(isOwnUrl(wc.getURL()) && allowed.has(permission));
   });
-  ses.setPermissionCheckHandler((_wc, permission, origin) => origin === APP_ORIGIN && allowed.has(permission));
+  // Electron passes the origin as a URL ("https://host/"), so compare normalized origins
+  ses.setPermissionCheckHandler((_wc, permission, origin) => isOwnUrl(origin) && allowed.has(permission));
 
   // Huddle screen sharing (navigator.mediaDevices.getDisplayMedia)
   ses.setDisplayMediaRequestHandler(async (request, callback) => {

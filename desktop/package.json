@@ -1,7 +1,7 @@
 {
   "name": "tasksphere-desktop",
   "productName": "TaskSphere",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "TaskSphere desktop app for Windows and macOS",
   "author": "VirtualSphere Technologies",
   "private": true,
