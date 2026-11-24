@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>TaskSphere</title>
+  <style>
+    body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font: 15px system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2430; background: #f6f7f9; }
+    .card { text-align: center; max-width: 380px; padding: 32px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { color: #6b7280; margin: 0 0 20px; line-height: 1.5; }
+    button { padding: 10px 20px; border-radius: 8px; border: 0; background: #5b5bd6; color: #fff; font: inherit; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Can't reach TaskSphere</h1>
+    <p>Check your internet connection. The app will retry automatically when you're back online.</p>
+    <button id="retry">Try again</button>
+  </div>
+  <script>
+    // The offline page has no preload, so retry by navigating straight back to the app
+    const target = new URLSearchParams(location.search).get('url');
+    const retry = () => { if (target && /^https?:/.test(target)) location.href = target; };
+    document.getElementById('retry').onclick = retry;
+    window.addEventListener('online', retry);
+    setInterval(() => { if (navigator.onLine) retry(); }, 15000);
+  </script>
+</body>
+</html>

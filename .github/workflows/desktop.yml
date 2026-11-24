@@ -1,0 +1,43 @@
+# Builds the TaskSphere desktop installers (Windows .exe and macOS .dmg).
+# Run it from GitHub → Actions → "Desktop app" → Run workflow, or push a tag like desktop-v1.0.0.
+# The installers appear under the run's "Artifacts".
+name: Desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            files: desktop/dist/*.exe
+          - os: macos-latest
+            script: dist:mac
+            files: desktop/dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run ${{ matrix.script }} -- --publish never
+        env:
+          # No signing certificates yet: build unsigned. When you have them, remove this
+          # line and add CSC_LINK / CSC_KEY_PASSWORD (and APPLE_ID etc. for notarizing) as secrets.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TaskSphere-${{ runner.os }}
+          path: ${{ matrix.files }}

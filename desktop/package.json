@@ -1,0 +1,78 @@
+{
+  "name": "tasksphere-desktop",
+  "productName": "TaskSphere",
+  "version": "1.0.0",
+  "description": "TaskSphere desktop app for Windows and macOS",
+  "author": "VirtualSphere Technologies",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.virtualsphere.tasksphere",
+    "productName": "TaskSphere",
+    "copyright": "Copyright © VirtualSphere Technologies",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "picker-preload.js",
+      "picker.html",
+      "offline.html",
+      "build/icon.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TaskSphere",
+      "artifactName": "TaskSphere-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "TaskSphere uses your camera for video huddles.",
+        "NSMicrophoneUsageDescription": "TaskSphere uses your microphone for huddles.",
+        "NSScreenCaptureUsageDescription": "TaskSphere lets you share your screen in huddles."
+      }
+    },
+    "dmg": {
+      "artifactName": "TaskSphere-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  }
+}
