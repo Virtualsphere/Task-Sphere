@@ -25,8 +25,9 @@ app.userAgentFallback = app.userAgentFallback
   .replace(/\sElectron\/\S+/, '')
   .replace(/\sTaskSphere\/\S+/, '');
 
-// Windows: notifications only show with the app id set (must match build.appId)
-if (process.platform === 'win32') app.setAppUserModelId('com.virtualsphere.tasksphere');
+// Windows: notifications only show with the app id set (must match build.appId). Development runs use their own
+// id: Electron adds an "Electron" Start Menu shortcut for it, which would take over the installed app's taskbar icon.
+if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? 'com.virtualsphere.tasksphere' : 'com.virtualsphere.tasksphere.dev');
 
 // One window only: opening the app again focuses the existing window
 if (!app.requestSingleInstanceLock()) {
