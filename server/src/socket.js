@@ -30,14 +30,6 @@ module.exports = function setupSocket(io) {
         io.to(contacts.map(svc.userRoom)).emit('presence', { userId: uid, online: false, last_seen_at: row?.last_seen_at || null });
       }
     });
-    if (presence.connect(uid)) {
-      await db.query('UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?', [uid]).catch(() => {});
-      const contacts = await svc.contactIds(uid).catch(() => []);
-      io.to(contacts.map(svc.userRoom)).emit('presence', { userId: uid, online: true });
-    }
-    // Messages that arrived while they were away are now delivered (✓✓)
-    svc.markAllDelivered(uid).catch(() => {});
-
     // ---- Space chat ----
     socket.on('space:join', async ({ spaceId } = {}, ack) => {
       const role = await getRole(Number(spaceId), uid).catch(() => null);
@@ -85,6 +77,16 @@ module.exports = function setupSocket(io) {
 
     // ---- Huddles ----
     huddles.register(io, socket);
+
+    // Last, because it waits for the database: handlers must already be attached by then, or anything the
+    // page sends right after connecting (e.g. opening a "Join the huddle" link) would be lost
+    if (presence.connect(uid)) {
+      await db.query('UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?', [uid]).catch(() => {});
+      const contacts = await svc.contactIds(uid).catch(() => []);
+      io.to(contacts.map(svc.userRoom)).emit('presence', { userId: uid, online: true });
+    }
+    // Messages that arrived while they were away are now delivered (✓✓)
+    svc.markAllDelivered(uid).catch(() => {});
   });
 
   // When someone is removed from a space, kick their sockets out of the room and its huddle

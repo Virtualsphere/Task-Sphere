@@ -12,7 +12,7 @@ import { useHuddle } from '../huddle/HuddleContext';
 import Avatar from '../components/Avatar';
 import { plainMentions } from '../components/ChatText';
 import { filePreviewText } from '../components/FileMessage';
-import { startRingtone, stopRingtone, retryRingtone, previewRingtone, playPing, unlockAudio, audioUnlocked } from './sounds';
+import { startRingtone, stopRingtone, retryRingtone, ringtoneAudible, previewRingtone, playPing, unlockAudio, audioUnlocked } from './sounds';
 import { showDesktop, closeDesktop, desktopPermission, askDesktopPermission, setNotificationNavigator } from './desktop';
 
 const AlertCtx = createContext(null);
@@ -40,12 +40,13 @@ export function NotificationProvider({ children }) {
   const [linkHuddle, setLinkHuddle] = useState(null); // { scope, id, key }
   useEffect(() => {
     const q = new URLSearchParams(location.search);
-    if (q.get('huddle') !== '1' || !huddle) return;
-    const m = location.pathname.match(/^\/(spaces|messages)\/(\d+)/);
+    if (!q.get('huddle') || !huddle) return;
+    // …?huddle=1 on a space or chat page; /messages?huddle=conv-12 for people added to a call in a chat they aren't in
+    const m = q.get('huddle') === '1' ? location.pathname.match(/^\/(spaces|messages)\/(\d+)/) : q.get('huddle').match(/^(space|conv)-(\d+)$/);
     q.delete('huddle');
     navigate({ pathname: location.pathname, search: q.toString() ? `?${q}` : '' }, { replace: true });
     if (!m) return;
-    const scope = m[1] === 'spaces' ? 'space' : 'conv';
+    const scope = m[1].startsWith('space') ? 'space' : 'conv';
     const id = Number(m[2]);
     huddle.fetchStatus(scope, id)
       .then((h) => (h ? setLinkHuddle({ scope, id, key: h.key }) : huddle.setNotice('That huddle has already ended')))
@@ -54,10 +55,11 @@ export function NotificationProvider({ children }) {
 
   const dismiss = useCallback((tag) => setCards((c) => c.filter((x) => x.tag !== tag)), []);
 
-  // One alert: chime, then a desktop popup if you're elsewhere, else an in-app card
-  const alert = useCallback(({ title, body, tag, path, from }) => {
-    playPing();
-    if (!looking() && showDesktop({ title, body, tag, path })) return;
+  // One alert: chime, then a desktop popup if you're elsewhere, else an in-app card.
+  // The popup is silent when our own chime played, so you don't hear Windows' sound on top of it.
+  const alert = useCallback(async ({ title, body, tag, path, from }) => {
+    const chimed = await playPing();
+    if (!looking() && showDesktop({ title, body, tag, path, silent: chimed })) return;
     setCards((c) => [...c.filter((x) => x.tag !== tag), { title, body, tag, path, from }].slice(-4));
     setTimeout(() => dismiss(tag), 9000);
   }, [dismiss]);
@@ -80,12 +82,16 @@ export function NotificationProvider({ children }) {
     const callPopup = (r) => {
       const direct = r.huddle.type === 'direct';
       showDesktop({
-        title: direct ? `📞 ${r.from.name} is calling you` : `📞 ${r.from.name} started a huddle`,
+        title: r.invited ? `📞 ${r.from.name} is adding you to a huddle` : direct ? `📞 ${r.from.name} is calling you` : `📞 ${r.from.name} started a huddle`,
         body: direct ? 'Huddle · click to open and join' : `In ${r.title} · click to open and join`,
-        tag: `huddle-${r.huddle.key}`, path: r.path, sticky: true, silent: false,
+        tag: `huddle-${r.huddle.key}`, path: r.path, sticky: true,
+        silent: ringtoneAudible(), // the ringtone is playing: no Windows sound on top of it
       });
     };
-    const onRing = (r) => { if (!looking()) callPopup(r); };
+    // A moment later, so the ringtone has started (or is known to be blocked)
+    const onRing = (r) => setTimeout(() => {
+      if (!looking() && ringsRef.current.some((x) => x.huddle.key === r.huddle.key)) callPopup(r);
+    }, 400);
     // The server re-rings every few seconds until you join: sound the popup again and make sure the
     // ringtone is going (e.g. if sound only just became allowed)
     const onRingTick = ({ key }) => {

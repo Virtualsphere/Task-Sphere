@@ -1,7 +1,7 @@
 {
   "name": "tasksphere-desktop",
   "productName": "TaskSphere",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TaskSphere desktop app for Windows and macOS",
   "author": "VirtualSphere Technologies",
   "private": true,
@@ -21,6 +21,7 @@
     },
     "files": [
       "main.js",
+      "app-preload.js",
       "picker-preload.js",
       "picker.html",
       "offline.html",
@@ -57,6 +58,7 @@
       ],
       "icon": "build/icon.png",
       "category": "public.app-category.productivity",
+      "identity": "-",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",

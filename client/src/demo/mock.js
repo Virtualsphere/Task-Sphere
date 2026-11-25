@@ -774,6 +774,15 @@ const socket = {
       return;
     }
 
+    if (e === 'huddle:invite') {
+      const h = [...HUDDLES.values()].find((x) => x.participants.some((p) => p.socketId.startsWith('me-')));
+      if (!h) { ack?.({ error: 'You are not in a huddle' }); return; }
+      const ids = (data.userIds || []).filter((u) => !h.participants.some((p) => p.userId === u));
+      ack?.({ ok: true, invited: ids });
+      ids.forEach((u, i) => h.timers.push(setTimeout(() => simJoin(h, u), 2000 + i * 1500)));
+      return;
+    }
+
     if (e === 'huddle:leave') {
       for (const h of HUDDLES.values()) {
         if (h.participants.some((p) => p.userId === me.id && p.socketId.startsWith('me-'))) {

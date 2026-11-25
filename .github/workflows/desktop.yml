@@ -34,10 +34,12 @@ jobs:
       - run: npm ci
       - run: npm run ${{ matrix.script }} -- --publish never
         env:
-          # No signing certificates yet: build unsigned. When you have them, remove this
-          # line and add CSC_LINK / CSC_KEY_PASSWORD (and APPLE_ID etc. for notarizing) as secrets.
+          # No certificates yet: Windows is unsigned, macOS is ad-hoc signed ("identity": "-" in package.json).
+          # When you have them, remove this line and that "identity", and add CSC_LINK / CSC_KEY_PASSWORD
+          # (and APPLE_ID etc. for notarizing) as secrets.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
           name: TaskSphere-${{ runner.os }}
           path: ${{ matrix.files }}
+          if-no-files-found: error

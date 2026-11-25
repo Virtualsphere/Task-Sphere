@@ -235,6 +235,9 @@ export function HuddleProvider({ children }) {
     return res?.huddle || null;
   }, []);
 
+  // Add people to the huddle I'm in: the server rings them. Resolves to { ok, invited } or { error }.
+  const invite = useCallback((userIds) => emitAck('huddle:invite', { userIds }), []);
+
   const dismissRing = (key) => setRings((r) => r.filter((x) => x.huddle.key !== key));
 
   // ---------- socket events ----------
@@ -277,6 +280,9 @@ export function HuddleProvider({ children }) {
     };
   }, [user, onSignal, cleanup]);
 
+  // Desktop app: it warns before hiding the window during a huddle (the microphone stays on)
+  useEffect(() => { window.tasksphereDesktop?.setInCall(!!active); }, [active]);
+
   // Leave cleanly when the tab closes
   useEffect(() => {
     const bye = () => { if (activeRef.current) getSocket().emit('huddle:leave', {}); };
@@ -292,7 +298,7 @@ export function HuddleProvider({ children }) {
 
   const value = {
     active, peers, local, states, rings, notice, me: user,
-    join, leave, toggleMic, toggleCamera, toggleScreen, fetchStatus, dismissRing, setNotice,
+    join, leave, toggleMic, toggleCamera, toggleScreen, fetchStatus, invite, dismissRing, setNotice,
   };
   return <HuddleCtx.Provider value={value}>{children}</HuddleCtx.Provider>;
 }

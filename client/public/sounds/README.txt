@@ -1,12 +1,8 @@
-Huddle ringtone
-===============
+TaskSphere sounds
+=================
 
-To use your own ringtone for incoming huddles, put an audio file here named:
+    ringtone.mp3       incoming huddle: loops while it rings (up to 60 seconds), stops on join or dismiss
+    notification.mp3   new message or @mention
 
-    ringtone.mp3
-
-It is played on a loop while a huddle is ringing (up to 60 seconds) and stops when the
-person joins or dismisses. Use a sound you have the rights to use. A clip of 2 to 6 seconds
-that loops cleanly works best.
-
-Without this file, TaskSphere plays its built-in call tone.
+To change a sound, replace the file and keep the same name. Use sounds you have the rights to use.
+If a file is missing, TaskSphere plays a built-in tone instead.

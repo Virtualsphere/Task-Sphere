@@ -33,6 +33,7 @@ export function showDesktop({ title, body, tag, path, sticky = false, silent = f
       badge: '/favicon-32.png',
     });
     n.onclick = () => {
+      window.tasksphereDesktop?.show(); // desktop app: the window may be hidden
       window.focus();
       if (path && navigateTo) navigateTo(path);
       n.close();

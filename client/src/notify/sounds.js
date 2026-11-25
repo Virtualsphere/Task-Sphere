@@ -1,9 +1,9 @@
 // Alert sounds.
 //  - startRingtone(): incoming-huddle call tone that loops until stopRingtone() (max 60 s)
-//  - playPing(): short chime for a mention or a new message
+//  - playPing(): short sound for a mention or a new message
 //
-// Ringtone: if the file /sounds/ringtone.mp3 exists (client/public/sounds/ringtone.mp3), that file is
-// played on a loop. Otherwise a built-in marimba-style call tone is generated with the Web Audio API.
+// The sounds are the files client/public/sounds/ringtone.mp3 (huddle, looped) and notification.mp3 (messages).
+// If a file is missing or can't play, a built-in tone is generated with the Web Audio API instead.
 // Either way the loop runs on the audio clock, not on JavaScript timers, so it keeps ringing even when
 // the tab is in the background (Chrome slows background timers down to once a minute).
 //
@@ -12,6 +12,7 @@
 // (re-sent every few seconds by the server while the call rings) is what the person hears.
 
 const RINGTONE_FILE = '/sounds/ringtone.mp3';
+const PING_FILE = '/sounds/notification.mp3';
 const MAX_RING_S = 60;
 
 let ctx = null;
@@ -44,7 +45,7 @@ export const audioUnlocked = () => !!ctx && ctx.state === 'running';
 export function unlockAudio() {
   const a = audio();
   if (a && a.state === 'suspended') a.resume().catch(() => {});
-  prepareRingtone();
+  buildRingBuffer();
 }
 if (typeof window !== 'undefined') {
   const once = () => { unlockAudio(); window.removeEventListener('pointerdown', once); window.removeEventListener('keydown', once); };
@@ -101,24 +102,21 @@ export function buildRingBuffer() {
   return ringBufferPromise;
 }
 
-// ---------- optional ringtone file ----------
+// ---------- sound files ----------
 
-let fileChecked = false;
-let fileAudio = null;
-function prepareRingtone() {
-  buildRingBuffer();
-  if (fileChecked || typeof fetch === 'undefined') return;
-  fileChecked = true;
-  fetch(RINGTONE_FILE, { method: 'HEAD' })
-    .then((r) => {
-      if (!r.ok || !(r.headers.get('content-type') || '').startsWith('audio')) return;
-      fileAudio = new Audio(RINGTONE_FILE);
-      fileAudio.loop = true;
-      fileAudio.preload = 'auto';
-      fileAudio.volume = 1;
-    })
-    .catch(() => {});
+// Loaded as soon as the page opens, so the first call or message already uses them.
+// Gives up on the file (-> built-in tone) if it is missing or not playable.
+function soundFile(url, loop) {
+  if (typeof Audio === 'undefined') return { el: null };
+  const f = { el: new Audio() };
+  f.el.addEventListener('error', () => { f.el = null; });
+  f.el.loop = loop;
+  f.el.preload = 'auto';
+  f.el.src = url;
+  return f;
 }
+const ringFile = soundFile(RINGTONE_FILE, true);
+const pingFile = soundFile(PING_FILE, false);
 
 // ---------- ringing ----------
 
@@ -126,20 +124,26 @@ let ringSource = null;
 let ringStopTimer = null;
 let ringing = false;
 
-/** Start the incoming-huddle ringtone (no-op if already ringing). Returns true if sound is playing. */
+/** Is the ringtone actually being heard right now? */
+export const ringtoneAudible = () => !!ringFile.el && !ringFile.el.paused || (!!ringSource && audioUnlocked());
+
+/** Start the incoming-huddle ringtone (no-op if already ringing). */
 export function startRingtone() {
-  prepareRingtone();
-  if (ringing) return audioUnlocked() || (fileAudio && !fileAudio.paused);
+  if (ringing) return;
   ringing = true;
   clearTimeout(ringStopTimer);
   ringStopTimer = setTimeout(stopRingtone, MAX_RING_S * 1000);
+  playRing();
+}
 
-  if (fileAudio) {
-    fileAudio.currentTime = 0;
-    fileAudio.play().catch(() => playBuiltIn()); // not allowed yet / bad file: fall back
-    return true;
-  }
-  return playBuiltIn();
+function playRing() {
+  if (!ringFile.el) { playBuiltIn(); return; }
+  ringFile.el.currentTime = 0;
+  ringFile.el.play().catch((e) => {
+    // Not allowed before the first click: try the built-in tone, retryRingtone() tries the file again.
+    // (AbortError = we stopped it ourselves before it started)
+    if (ringing && e.name !== 'AbortError') playBuiltIn();
+  });
 }
 
 function playBuiltIn() {
@@ -147,7 +151,7 @@ function playBuiltIn() {
   if (!a) return false;
   if (a.state === 'suspended') a.resume().catch(() => {});
   const go = (buf) => {
-    if (!ringing || !buf || ringSource) return;
+    if (!ringing || !buf || ringSource || a.state !== 'running') return;
     const src = a.createBufferSource();
     src.buffer = buf;
     src.loop = true; // seamless loop on the audio clock
@@ -169,23 +173,33 @@ export function stopRingtone() {
   ringStopTimer = null;
   try { ringSource?.stop(); } catch { /* already stopped */ }
   ringSource = null;
-  if (fileAudio) { fileAudio.pause(); fileAudio.currentTime = 0; }
+  if (ringFile.el) { ringFile.el.pause(); ringFile.el.currentTime = 0; }
 }
 
 // If the page becomes allowed to play sound while a call is still ringing, start the tone then
 export function retryRingtone() {
-  if (ringing && !ringSource && !(fileAudio && !fileAudio.paused)) playBuiltIn();
+  if (ringing && !ringtoneAudible()) playRing();
 }
 
 let lastPing = 0;
-/** Short chime for a mention or a message (at most one per second). */
-export function playPing() {
+/** Short sound for a mention or a message (at most one per second). Resolves to true if it was heard. */
+export async function playPing() {
+  if (Date.now() - lastPing < 1000) return true; // one just played
+  if (pingFile.el) {
+    try {
+      pingFile.el.currentTime = 0;
+      await pingFile.el.play();
+      lastPing = Date.now();
+      return true;
+    } catch { /* not allowed yet, or the file can't play: try the built-in chime */ }
+  }
   const a = audio();
-  if (!a || a.state !== 'running' || Date.now() - lastPing < 1000) return;
+  if (!a || a.state !== 'running') return false;
   lastPing = Date.now();
   const t = a.currentTime + 0.02;
   strike(a, master, N.A5, t, 0.5, 0.5);
   strike(a, master, N.E6, t + 0.12, 0.5, 0.7);
+  return true;
 }
 
 // For the "Test sound" button

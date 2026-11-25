@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCards } from '../notify/NotificationCenter';
 import { useHuddle } from './HuddleContext';
+import { api } from '../api';
 import Avatar from '../components/Avatar';
 
 function useElapsed(since) {
@@ -92,6 +93,63 @@ function useDrag(boundsRef) {
   return [pos, setPos, start];
 }
 
+// Pick people to add to the call. Drawn inside the huddle window (not as a page modal) so it also works in full screen.
+function InvitePanel({ inCall, onClose }) {
+  const h = useHuddle();
+  const [people, setPeople] = useState(null);
+  const [q, setQ] = useState('');
+  const [sel, setSel] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    api('/people').then((p) => alive && setPeople(p)).catch((e) => alive && setError(e.message));
+    return () => { alive = false; };
+  }, []);
+
+  const term = q.trim().toLowerCase();
+  const shown = (people || [])
+    .filter((p) => !inCall.has(p.id) && (!term || p.name.toLowerCase().includes(term) || (p.email || '').toLowerCase().includes(term)))
+    .sort((a, b) => Number(b.online) - Number(a.online)); // online first, otherwise by name
+  const chosen = [...sel].filter((id) => !inCall.has(id));
+  const toggle = (id) => setSel((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n; });
+  const add = async () => {
+    setBusy(true); setError('');
+    const res = await h.invite(chosen);
+    setBusy(false);
+    if (res?.error) { setError(res.error); return; }
+    h.setNotice(`Calling ${people.filter((p) => res.invited.includes(p.id)).map((p) => p.name).join(', ')}…`);
+    onClose();
+  };
+
+  return (
+    <div className="huddle-invite" role="dialog" aria-label="Add people to the huddle">
+      <div className="huddle-invite-head">
+        <strong>Add people to this call</strong>
+        <button type="button" className="icon-btn light" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or email" aria-label="Search people" autoFocus
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }} />
+      <div className="huddle-invite-list">
+        {!people && !error && <span className="muted-light small">Loading…</span>}
+        {people && shown.length === 0 && <span className="muted-light small">No one else to add.</span>}
+        {shown.map((p) => (
+          <label key={p.id} className={`huddle-invite-person ${sel.has(p.id) ? 'on' : ''}`}>
+            <input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} />
+            <Avatar user={p} size={24} online={p.online} />
+            <span className="clamp1 grow">{p.name}</span>
+            {!p.online && <span className="muted-light small">offline</span>}
+          </label>
+        ))}
+      </div>
+      {error && <div className="huddle-invite-error small" role="alert">{error}</div>}
+      <button type="button" className="btn primary small" disabled={!chosen.length || busy} onClick={add}>
+        {busy ? 'Calling…' : chosen.length > 1 ? `Call ${chosen.length} people` : 'Call'}
+      </button>
+    </div>
+  );
+}
+
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
 function toggleFullscreen(el) {
   if (fsElement()) return (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
@@ -102,6 +160,7 @@ export default function HuddleWindow() {
   const h = useHuddle();
   const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [inviting, setInviting] = useState(false);
   const elapsed = useElapsed(h?.active?.startedAt);
   const winRef = useRef(null);
   const stageRef = useRef(null);
@@ -125,10 +184,16 @@ export default function HuddleWindow() {
   // Leaving the huddle while in full screen: exit full screen too
   useEffect(() => { if (!h?.active && fsElement()) toggleFullscreen(); }, [h?.active]);
 
+  useEffect(() => { setInviting(false); }, [h?.active?.key]);
+
   if (!h) return null;
 
   const { active, peers, local, notice, me } = h;
   const list = Object.entries(peers);
+  // Once more people are added to a 1:1 call, name everyone instead of just the other person
+  const title = active && active.scope === 'conv' && h.states[active.key]?.type === 'direct' && list.length > 1
+    ? list.map(([, p]) => p.name.split(' ')[0]).join(', ') : active?.title;
+  const inCall = new Set([me?.id, ...list.map(([, p]) => p.userId)]);
   const big = expanded || fullscreen;
 
   // Everyone in the call as tile props; the self tile first
@@ -152,7 +217,7 @@ export default function HuddleWindow() {
           <div className={`huddle-head ${big ? '' : 'draggable'}`} onPointerDown={big ? undefined : (e) => dragWin(e, winRef.current)}
             title={big ? undefined : 'Drag to move'}>
             <span className="live-dot" />
-            <strong className="clamp1">🎧 {active.title}</strong>
+            <strong className="clamp1">🎧 {title}</strong>
             <span className="muted-light small">{list.length + 1} · {elapsed}</span>
             {fsSupported && (
               <button className="icon-btn light" onClick={() => (fullscreen ? toggleFullscreen() : goFullscreen())} title={fullscreen ? 'Exit full screen' : 'Full screen'}>{fullscreen ? '🗗' : '⛶'}</button>
@@ -180,10 +245,12 @@ export default function HuddleWindow() {
             </div>
           )}
           {list.length === 0 && <div className="huddle-waiting">Waiting for others to join…</div>}
+          {inviting && <InvitePanel inCall={inCall} onClose={() => setInviting(false)} />}
           <div className="huddle-controls">
             <button className={`hbtn ${local.audio ? '' : 'off'}`} onClick={h.toggleMic} title={local.audio ? 'Mute' : 'Unmute'}>{local.audio ? '🎙' : '🔇'}</button>
             <button className={`hbtn ${local.video ? 'on' : ''}`} onClick={h.toggleCamera} title="Camera">📷</button>
             <button className={`hbtn ${local.screen ? 'on' : ''}`} onClick={h.toggleScreen} title="Share screen">🖥</button>
+            <button className={`hbtn ${inviting ? 'on' : ''}`} onClick={() => setInviting((v) => !v)} title="Add people to this call" aria-label="Add people to this call" aria-expanded={inviting}>＋👤</button>
             <button className="hbtn leave" onClick={h.leave} title="Leave huddle">Leave</button>
           </div>
         </div>
@@ -196,7 +263,8 @@ export default function HuddleWindow() {
             <div className="grow">
               <strong>{r.from.name}</strong>
               <div className="small muted">
-                {r.huddle.type === 'direct' ? 'is calling you 🎧' : `started a huddle in ${r.title}`}
+                {r.invited ? `is adding you to a huddle${r.huddle.type === 'direct' ? '' : ` in ${r.title}`} 🎧`
+                  : r.huddle.type === 'direct' ? 'is calling you 🎧' : `started a huddle in ${r.title}`}
               </div>
             </div>
             <button className="btn primary small" onClick={() => h.join(r.huddle.scope, r.huddle.scopeId, r.title)}>Join</button>

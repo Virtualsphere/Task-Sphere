@@ -34,17 +34,17 @@ const HUDDLE_EMAIL_GAP_MS = 10 * 60 * 1000;
 const lastHuddleEmail = new Map(); // `${userId}|${key}` -> time
 
 /**
- * A huddle just started. Emails everyone who can join (except the starter).
+ * A huddle just started, or (invited) people were added to a running one. Emails those who are offline.
  * scope 'space' | 'conv'; type 'space' | 'group' | 'direct'; title = space / group name.
  */
-async function huddleStarted({ scope, scopeId, starterId, title, type, recipientIds }) {
+async function huddleStarted({ scope, scopeId, starterId, title, type, recipientIds, path: joinPath, invited = false }) {
   try {
     if (!mailer.mailEnabled) return;
     const [[starter]] = await db.query('SELECT id, name, email FROM users WHERE id = ?', [starterId]);
     if (!starter) return;
     const key = `${scope}:${scopeId}`;
     const now = Date.now();
-    const path = scope === 'space' ? `/spaces/${scopeId}?huddle=1` : `/messages/${scopeId}?huddle=1`;
+    const path = joinPath || (scope === 'space' ? `/spaces/${scopeId}?huddle=1` : `/messages/${scopeId}?huddle=1`);
     const where = scope === 'space' ? `the space “${title}”` : type === 'group' ? `the group chat “${title}”` : 'a 1:1 chat';
     const people = await usersByIds(recipientIds.filter((id) => id !== starterId));
     for (const u of people) {
@@ -53,7 +53,7 @@ async function huddleStarted({ scope, scopeId, starterId, title, type, recipient
       if (now - (lastHuddleEmail.get(k) || 0) < HUDDLE_EMAIL_GAP_MS) continue;
       lastHuddleEmail.set(k, now);
       mailer.sendHuddleStarted({
-        to: u.email, starterName: starter.name, starterEmail: starter.email, where, direct: type === 'direct', path,
+        to: u.email, starterName: starter.name, starterEmail: starter.email, where, direct: invited || type === 'direct', path,
       });
     }
   } catch (e) {

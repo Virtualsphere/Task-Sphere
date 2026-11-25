@@ -350,6 +350,17 @@ a.btn { display: inline-flex; align-items: center; gap: 6px; }
 .tile-avatar .avatar-fallback { background: #3b3f63; color: #dfe3ff; }
 .tile-label { position: absolute; left: 6px; bottom: 6px; right: 6px; font-size: 11px; display: flex; gap: 4px; align-items: center; background: rgba(0, 0, 0, .45); padding: 2px 7px; border-radius: 6px; width: fit-content; max-width: calc(100% - 12px); }
 .huddle-waiting { font-size: 12px; color: #a3a8c3; text-align: center; padding: 0 0 8px; }
+.huddle-invite { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid #2a2d45; background: #1c1f35; }
+.huddle-invite-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.huddle-invite > input { background: #24273d; border: 1px solid #3b3f63; border-radius: 8px; color: #fff; padding: 7px 10px; font: inherit; font-size: 13px; width: 100%; }
+.huddle-invite > input::placeholder { color: #a3a8c3; }
+.huddle-invite-list { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto; }
+.huddle-invite-person { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; font-size: 13px; font-weight: 400; color: #fff; cursor: pointer; }
+.huddle-invite-person:hover { background: #2a2d45; }
+.huddle-invite-person.on { background: #34386b; }
+.huddle-invite-person input { width: auto; margin: 0; }
+.huddle-invite-error { color: #fca5a5; }
+.huddle-window.expanded .huddle-invite { position: absolute; right: 16px; bottom: 70px; z-index: 3; width: 320px; max-width: calc(100% - 32px); border: 1px solid #3b3f63; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
 .huddle-controls { display: flex; gap: 8px; justify-content: center; padding: 10px; border-top: 1px solid #2a2d45; }
 .hbtn { border: none; background: #2f3350; color: #fff; border-radius: 99px; min-width: 42px; height: 38px; font-size: 16px; cursor: pointer; padding: 0 12px; }
 .hbtn:hover { background: #3d4166; }

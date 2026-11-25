@@ -2,7 +2,7 @@
 // A native window around the live TaskSphere site, so the website, desktop app and
 // server always share the same code and data. Nothing here changes the website.
 const {
-  app, BrowserWindow, Menu, shell, session, desktopCapturer, ipcMain, nativeImage,
+  app, BrowserWindow, Menu, Notification, Tray, dialog, shell, session, desktopCapturer, ipcMain, nativeImage,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -12,7 +12,12 @@ const APP_URL = (process.env.TASKSPHERE_URL || 'https://pm.virtualspheretechnolo
 const APP_ORIGIN = new URL(APP_URL).origin;
 const isMac = process.platform === 'darwin';
 
+const ICON = path.join(__dirname, 'build', 'icon.png');
+
 let mainWindow = null;
+let tray = null;
+let quitting = false; // really quitting (tray menu, Cmd+Q, shutdown), as opposed to closing the window
+let inCall = false;   // told by the page (see app-preload.js)
 
 // Google refuses to sign in from browsers it thinks are "embedded" (it looks for
 // "Electron" in the user agent). Present as the plain Chrome that Electron is built on.
@@ -27,12 +32,7 @@ if (process.platform === 'win32') app.setAppUserModelId('com.virtualsphere.tasks
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  });
+  app.on('second-instance', () => showWindow());
 }
 
 // ---------- URL rules ----------
@@ -54,12 +54,76 @@ const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 function loadWindowState() {
   try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return { width: 1400, height: 900 }; }
 }
-function saveWindowState(win) {
+function saveWindowState(win, extra = {}) {
   try {
     const b = win.getNormalBounds();
-    fs.writeFileSync(stateFile(), JSON.stringify({ ...b, maximized: win.isMaximized() }));
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...loadWindowState(), ...b, maximized: win.isMaximized(), ...extra }));
   } catch { /* not important */ }
 }
+
+// ---------- Running in the background ----------
+// Closing the window only hides it, so huddle calls still ring and messages still notify.
+// Quit from the tray icon (Windows) or with Cmd+Q / the Dock (macOS).
+function showWindow() {
+  if (!mainWindow) { if (app.isReady()) createWindow(); return; }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function hideWindow() {
+  // Never leave someone on a call in a window they can't see without saying so: the microphone stays on
+  if (inCall) {
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'question', title: 'TaskSphere', message: 'You are in a huddle',
+      detail: 'If you close the window, the huddle keeps going in the background and people can still hear you.',
+      buttons: ['Keep window open', 'Continue in background'], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (choice === 0) return;
+  }
+  const win = mainWindow;
+  const firstTime = !loadWindowState().backgroundTipShown;
+  saveWindowState(win, { backgroundTipShown: true });
+  // macOS: hiding a full-screen window leaves a black screen, so leave full screen first
+  if (isMac && win.isFullScreen()) {
+    win.once('leave-full-screen', () => win.hide());
+    win.setFullScreen(false);
+  } else {
+    win.hide();
+  }
+  if (firstTime && Notification.isSupported()) {
+    const n = new Notification({
+      title: 'TaskSphere is still running',
+      body: isMac ? 'You will still get calls and messages. To quit, press Cmd+Q.'
+        : 'You will still get calls and messages. To quit, right-click the TaskSphere icon next to the clock.',
+      icon: ICON,
+    });
+    n.on('click', showWindow);
+    n.show();
+  }
+}
+
+function setupTray() {
+  if (isMac) return; // macOS: the Dock icon does this job
+  tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 32, height: 32, quality: 'best' }));
+  tray.setToolTip('TaskSphere');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open TaskSphere', click: showWindow },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ]));
+  tray.on('click', showWindow);
+}
+
+function setInCall(value) {
+  inCall = value;
+  tray?.setToolTip(value ? 'TaskSphere (in a huddle)' : 'TaskSphere');
+}
+
+// Messages from the page (app-preload.js); only TaskSphere itself in the main window is listened to
+const fromApp = (e) => mainWindow && e.sender === mainWindow.webContents && isOwnUrl(e.senderFrame?.url || '');
+ipcMain.on('app:show', (e) => { if (fromApp(e)) showWindow(); });
+ipcMain.on('app:in-call', (e, value) => { if (fromApp(e)) setInCall(value === true); });
 
 // ---------- Main window ----------
 function createWindow() {
@@ -68,10 +132,11 @@ function createWindow() {
     x: state.x, y: state.y, width: state.width, height: state.height,
     minWidth: 900, minHeight: 600,
     title: 'TaskSphere',
-    icon: path.join(__dirname, 'build', 'icon.png'),
+    icon: ICON,
     backgroundColor: '#ffffff',
     show: false,
     webPreferences: {
+      preload: path.join(__dirname, 'app-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -80,8 +145,15 @@ function createWindow() {
   });
   if (state.maximized) mainWindow.maximize();
   mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('close', () => saveWindowState(mainWindow));
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('close', (e) => {
+    if (quitting) { saveWindowState(mainWindow); return; }
+    e.preventDefault();
+    hideWindow();
+  });
+  mainWindow.on('closed', () => { mainWindow = null; setInCall(false); });
+  // Windows is shutting down or signing out: don't hold it up
+  mainWindow.on('query-session-end', () => { quitting = true; });
+  mainWindow.on('session-end', () => { quitting = true; });
 
   const wc = mainWindow.webContents;
 
@@ -93,7 +165,7 @@ function createWindow() {
         action: 'allow',
         overrideBrowserWindowOptions: {
           width: 520, height: 680, autoHideMenuBar: true,
-          webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+          webPreferences: { preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true },
         },
       };
     }
@@ -105,6 +177,8 @@ function createWindow() {
   wc.on('will-navigate', (e, url) => {
     if (!isOwnUrl(url)) { e.preventDefault(); openExternal(url); }
   });
+
+  wc.on('did-navigate', () => setInCall(false)); // page reloaded: any call is over
 
   // Server unreachable / no internet → friendly retry page
   wc.on('did-fail-load', (_e, code, _desc, url, isMainFrame) => {
@@ -198,13 +272,16 @@ function setupMenu() {
 app.whenReady().then(() => {
   setupPermissions();
   setupMenu();
-  if (isMac && app.dock) app.dock.setIcon(nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')));
+  if (isMac && app.dock) app.dock.setIcon(nativeImage.createFromPath(ICON));
   createWindow();
+  setupTray();
   if (!isMac && mainWindow) mainWindow.setMenuBarVisibility(false); // Windows: menu hidden, Alt shows it
 
   // macOS: clicking the dock icon reopens the window
-  app.on('activate', () => { if (!mainWindow) createWindow(); });
+  app.on('activate', () => showWindow());
 });
+
+app.on('before-quit', () => { quitting = true; });
 
 app.on('window-all-closed', () => {
   if (!isMac) app.quit(); // macOS apps stay in the dock until Cmd+Q
